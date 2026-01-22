@@ -6,39 +6,31 @@ A command-line interface for managing your PigCloud storage.
 
 ### Download Binary
 
-Download the latest release for your platform:
+Download the appropriate binary for your platform from the [releases page](https://pigtech.de/cli/).
 
-| Platform | Download |
-|----------|----------|
-| Windows (64-bit) | [pigcloud-windows-amd64.exe](https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-windows-amd64.exe) |
-| Linux (64-bit) | [pigcloud-linux-amd64](https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-linux-amd64) |
-| Linux (ARM64) | [pigcloud-linux-arm64](https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-linux-arm64) |
-| macOS (Intel) | [pigcloud-darwin-amd64](https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-darwin-amd64) |
-| macOS (Apple Silicon) | [pigcloud-darwin-arm64](https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-darwin-arm64) |
-
-### Linux / macOS
+#### Linux / macOS
 
 ```bash
-# Download (example for Linux 64-bit)
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-linux-amd64 -o pigcloud
+# Download (replace URL with actual download link)
+curl -sSL https://pigtech.de/cli/pigcloud-linux-amd64 -o pigcloud
 chmod +x pigcloud
 sudo mv pigcloud /usr/local/bin/
 
-# Optional: Create 'pc' shorthand
+# Optional: Also install the 'pc' shorthand
 sudo ln -s /usr/local/bin/pigcloud /usr/local/bin/pc
 ```
 
-### Windows
+#### Windows
 
-Download `pigcloud-windows-amd64.exe`, rename it to `pigcloud.exe` (or `pc.exe`), and add it to your PATH.
+Download `pigcloud-windows-amd64.exe` and add it to your PATH, or run it directly.
 
 ### Build from Source
 
 Requires Go 1.21 or later.
 
 ```bash
-git clone https://github.com/pigtech-de/pigcloud-cli.git
-cd pigcloud-cli
+cd cli
+go mod download
 go build -o pigcloud .
 ```
 
@@ -48,9 +40,6 @@ go build -o pigcloud .
 # Login with your API key
 pigcloud login
 
-# Or provide the key directly
-pigcloud login YOUR_API_KEY
-
 # List files
 pigcloud ls
 
@@ -59,26 +48,61 @@ pigcloud ul document.pdf /Documents/
 
 # Download a file
 pigcloud dl /Documents/document.pdf ./
+
+# Start interactive shell
+pigcloud shell
 ```
 
 ## Commands
 
-Use `pc` as a shorthand for `pigcloud`. Commands also have aliases.
+Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `login` | - | Authenticate with your API key |
-| `logout` | - | Remove stored credentials |
-| `ls` | `list` | List files and directories |
-| `cd` | - | Change working directory |
-| `in` | `info` | Show file or directory info |
-| `ul` | `upload` | Upload a file |
-| `dl` | `download` | Download a file or folder |
-| `mv` | `move` | Move or rename a file/directory |
-| `rm` | `remove` | Delete a file or directory |
-| `sr` | `share` | Share a folder with another user |
-| `hl` | `help` | Show help |
-| `completion` | - | Generate shell completions |
+### Authentication
+
+| Command | Alias    | Description                    |
+|---------|----------|--------------------------------|
+| `li`    | `login`  | Authenticate with your API key |
+| `lo`    | `logout` | Remove stored credentials      |
+| `wh`    | `whoami` | Show current user info         |
+
+### Navigation
+
+| Command | Alias  | Description                 | Flags                                                           |
+|---------|--------|-----------------------------|-----------------------------------------------------------------|
+| `ls`    | `list` | List files and directories  | `-l` long, `-r` recursive, `-S` sort by size, `-t` sort by time |
+| `cd`    | -      | Change working directory    |                                                                 |
+| `wd`    | `pwd`  | Print working directory     |                                                                 |
+| `tr`    | `tree` | Display directory tree      | `-d` depth, `-D` dirs only                                      |
+| `fd`    | `find` | Find files by name pattern  | `-t` type (f/d), `-n` limit                                     |
+| `in`    | `info` | Show file or directory info |                                                                 |
+
+### File Operations
+
+| Command | Alias      | Description                     | Flags                          |
+|---------|------------|---------------------------------|--------------------------------|
+| `ul`    | `upload`   | Upload a file                   |                                |
+| `dl`    | `download` | Download a file or folder       |                                |
+| `ct`    | `cat`      | Display file content            | `-n` lines, `--head`, `--tail` |
+| `mk`    | `mkdir`    | Create a new directory          | `-p` create parents            |
+| `mv`    | `move`     | Move or rename a file/directory |                                |
+| `rm`    | `remove`   | Delete a file or directory      | `-y` confirm, `-f` force       |
+
+### Sharing
+
+| Command | Alias   | Description                      | Flags                        |
+|---------|---------|----------------------------------|------------------------------|
+| `sr`    | `share` | Share a folder with another user | `-p` permissions (read/edit) |
+
+### Info & Tools
+
+| Command | Alias        | Description                       |
+|---------|--------------|-----------------------------------|
+| `st`    | `stat`       | Show storage statistics           |
+| `cf`    | `config`     | View and modify CLI configuration |
+| `sh`    | `shell`      | Start an interactive shell        |
+| `vr`    | `version`    | Show version information          |
+| `hl`    | `help`       | Show help                         |
+| `cp`    | `completion` | Generate shell completions        |
 
 ## Examples
 
@@ -86,29 +110,72 @@ Use `pc` as a shorthand for `pigcloud`. Commands also have aliases.
 # Navigate
 pc cd /Documents
 pc ls
+pc ls -l -S                     # Detailed list, sorted by size
 
 # File operations
-pc ul report.pdf              # Upload to current directory
-pc dl report.pdf ./           # Download to current directory
-pc mv report.pdf archive/     # Move to archive folder
-pc rm old-file.txt -y         # Delete with confirmation skip
+pc ul report.pdf                # Upload to current directory
+pc dl report.pdf ./             # Download to current directory
+pc mv report.pdf archive/       # Move to archive folder
+pc rm old-file.txt -y           # Delete with confirmation skipped
+pc ct readme.txt -n 20          # Show first 20 lines
+
+# Search and explore
+pc fd "*.pdf" /Documents        # Find PDF files
+pc tr -d 2                      # Tree with depth 2
+
+# Directory management
+pc mk -p /projects/new/folder   # Create nested directories
 
 # Sharing
-pc sr /Projects teammate --permissions edit
-pc in /Projects               # View sharing info
+pc sr /Projects teammate -p edit  # Share with edit permissions
+pc in /Projects                   # View sharing info
+
+# Configuration
+pc cf list                      # Show all config
+pc cf set cwd /Documents        # Change default directory
+
+# Interactive shell
+pc shell
+/ > ls
+/ > cd Documents
+/Documents > exit
 
 # Get help
 pc hl
-pc upload --help
+pc ls --help
 ```
 
 ## Configuration
 
 Configuration is stored in:
-- **Linux/macOS:** `~/.config/pigcloud/config.json`
-- **Windows:** `%APPDATA%\pigcloud\config.json`
+- Linux/macOS: `~/.config/pigcloud/config.json`
+- Windows: `%APPDATA%\pigcloud\config.json`
+
+### Config Commands
+
+```bash
+# View all configuration
+pc cf list
+
+# Get a specific value
+pc cf get endpoint
+
+# Set a value
+pc cf set cwd /Documents
+pc cf set endpoint https://custom.example.com/api
+```
+
+### Config Keys
+
+| Key        | Description                                |
+|------------|--------------------------------------------|
+| `api_key`  | Your API key for authentication            |
+| `endpoint` | The PigCloud API endpoint URL              |
+| `cwd`      | Current working directory in cloud storage |
 
 ## Shell Completion
+
+Tab completion for remote paths is built-in. Enable shell completion:
 
 ```bash
 # Bash
@@ -122,6 +189,43 @@ pigcloud completion fish | source
 
 # PowerShell
 pigcloud completion powershell | Out-String | Invoke-Expression
+```
+
+## Interactive Shell
+
+Start an interactive shell for running multiple commands:
+
+```bash
+pc shell
+```
+
+Features:
+- Prompt shows current working directory
+- Commands don't exit on errors
+- Type `exit` or `quit` to leave
+
+## Global Flags
+
+| Flag          | Description                         |
+|---------------|-------------------------------------|
+| `--json`      | Output in JSON format for scripting |
+| `-q, --quiet` | Suppress non-essential output       |
+| `--config`    | Use a specific config file          |
+
+## Building
+
+```bash
+# Build for current platform
+make build
+
+# Build for all platforms
+make build-all
+
+# Build with version info
+make build-all VERSION=1.2.0
+
+# Run tests
+make test
 ```
 
 ## License

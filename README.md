@@ -75,17 +75,19 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | `tr`    | `tree` | Display directory tree      | `-d` depth, `-D` dirs only                                      |
 | `fd`    | `find` | Find files by name pattern  | `-t` type (f/d), `-n` limit                                     |
 | `in`    | `info` | Show file or directory info |                                                                 |
+| `op`    | `open` | Open file/folder in browser |                                                                 |
 
 ### File Operations
 
-| Command | Alias      | Description                     | Flags                          |
-|---------|------------|---------------------------------|--------------------------------|
-| `ul`    | `upload`   | Upload a file                   |                                |
-| `dl`    | `download` | Download a file or folder       |                                |
-| `ct`    | `cat`      | Display file content            | `-n` lines, `--head`, `--tail` |
-| `mk`    | `mkdir`    | Create a new directory          | `-p` create parents            |
-| `mv`    | `move`     | Move or rename a file/directory |                                |
-| `rm`    | `remove`   | Delete a file or directory      | `-y` confirm, `-f` force       |
+| Command | Alias      | Description                     | Flags                                         |
+|---------|------------|---------------------------------|-----------------------------------------------|
+| `ul`    | `upload`   | Upload a file                   |                                               |
+| `dl`    | `download` | Download a file or folder       |                                               |
+| `ct`    | `cat`      | Display file content            | `-n` lines, `--head`, `--tail`                |
+| `mk`    | `mkdir`    | Create a new directory          | `-p` create parents                           |
+| `mv`    | `move`     | Move or rename a file/directory | `-d` dry run                                  |
+| `rm`    | `remove`   | Delete a file or directory      | `-y` confirm, `-f` force, `-p` perm, `-d` dry |
+| `rs`    | `restore`  | Restore from recycling bin      |                                               |
 
 ### Sharing
 
@@ -116,8 +118,12 @@ pc ls -l -S                     # Detailed list, sorted by size
 pc ul report.pdf                # Upload to current directory
 pc dl report.pdf ./             # Download to current directory
 pc mv report.pdf archive/       # Move to archive folder
+pc mv -d old.txt new.txt        # Preview move (dry run)
 pc rm old-file.txt -y           # Delete with confirmation skipped
+pc rm -d important.txt          # Preview deletion (dry run)
+pc rs /.Trash/file.txt          # Restore from recycling bin
 pc ct readme.txt -n 20          # Show first 20 lines
+pc op /Documents                # Open folder in browser
 
 # Search and explore
 pc fd "*.pdf" /Documents        # Find PDF files

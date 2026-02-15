@@ -67,44 +67,51 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 
 ### Navigation
 
-| Command | Alias  | Description                 | Flags                                                           |
-|---------|--------|-----------------------------|-----------------------------------------------------------------|
-| `ls`    | `list` | List files and directories  | `-l` long, `-r` recursive, `-S` sort by size, `-t` sort by time |
-| `cd`    | -      | Change working directory    |                                                                 |
-| `wd`    | `pwd`  | Print working directory     |                                                                 |
-| `tr`    | `tree` | Display directory tree      | `-d` depth, `-D` dirs only                                      |
-| `fd`    | `find` | Find files by name pattern  | `-t` type (f/d), `-n` limit                                     |
-| `in`    | `info` | Show file or directory info |                                                                 |
-| `op`    | `open` | Open file/folder in browser |                                                                 |
+| Command | Alias            | Description                 | Flags                                                           |
+|---------|------------------|-----------------------------|-----------------------------------------------------------------|
+| `ls`    | `list`           | List files and directories  | `-l` long, `-r` recursive, `-S` sort by size, `-t` sort by time |
+| `cd`    | -                | Change working directory    |                                                                 |
+| `wd`    | `pwd`            | Print working directory     |                                                                 |
+| `tr`    | `tree`           | Display directory tree      | `-d` depth, `-D` dirs only                                      |
+| `fd`    | `find`, `search` | Find files by name pattern  | `-t` type (f/d), `-n` limit                                     |
+| `in`    | `info`           | Show file or directory info |                                                                 |
+| `op`    | `open`           | Open file/folder in browser |                                                                 |
 
 ### File Operations
 
-| Command | Alias      | Description                     | Flags                                         |
-|---------|------------|---------------------------------|-----------------------------------------------|
-| `ul`    | `upload`   | Upload a file                   |                                               |
-| `dl`    | `download` | Download a file or folder       |                                               |
-| `ct`    | `cat`      | Display file content            | `-n` lines, `--head`, `--tail`                |
-| `mk`    | `mkdir`    | Create a new directory          | `-p` create parents                           |
-| `mv`    | `move`     | Move or rename a file/directory | `-d` dry run                                  |
-| `rm`    | `remove`   | Delete a file or directory      | `-y` confirm, `-f` force, `-p` perm, `-d` dry |
-| `rs`    | `restore`  | Restore from recycling bin      |                                               |
+| Command | Alias         | Description                     | Flags                          |
+|---------|---------------|---------------------------------|--------------------------------|
+| `ul`    | `upload`      | Upload a file                   |                                |
+| `dl`    | `download`    | Download a file or folder       |                                |
+| `ct`    | `cat`         | Display file content            | `-n` lines, `--head`, `--tail` |
+| `mk`    | `mkdir`       | Create a new directory          | `-p` create parents            |
+| `mv`    | `move`        | Move or rename a file/directory | `-d` dry run                   |
+| `rm`    | `remove`      | Delete a file or directory      | `-p` permanent, `-d` dry run   |
+| `et`    | `empty-trash` | Empty the recycling bin         |                                |
+| `rs`    | `restore`     | Restore from recycling bin      |                                |
 
 ### Sharing
 
-| Command | Alias   | Description                      | Flags                        |
-|---------|---------|----------------------------------|------------------------------|
-| `sr`    | `share` | Share a folder with another user | `-p` permissions (read/edit) |
+| Command                     | Alias   | Description              | Flags                        |
+|-----------------------------|---------|--------------------------|------------------------------|
+| `sr <path> <user>`          | `share` | Share a folder with user | `-p` permissions (read/edit) |
+| `sr ls <path>`              |         | List share recipients    |                              |
+| `sr rm <path> <user>`       |         | Remove a share recipient |                              |
+| `sr inbox`                  |         | List received shares     |                              |
+| `sr decline <path> <owner>` |         | Decline a received share |                              |
 
 ### Info & Tools
 
-| Command | Alias        | Description                       |
-|---------|--------------|-----------------------------------|
-| `st`    | `stat`       | Show storage statistics           |
-| `cf`    | `config`     | View and modify CLI configuration |
-| `sh`    | `shell`      | Start an interactive shell        |
-| `vr`    | `version`    | Show version information          |
-| `hl`    | `help`       | Show help                         |
-| `cp`    | `completion` | Generate shell completions        |
+| Command | Alias            | Description                          | Flags                                      |
+|---------|------------------|--------------------------------------|--------------------------------------------|
+| `st`    | `stat`, `status` | Show storage statistics              |                                            |
+| `du`    | `usage`          | Show storage breakdown by file type  | `-c` cleanup suggestions, `-n` file limit  |
+| `ac`    | `activity`       | View activity log and notifications  | `-n` limit, `-u` unread, `-m` mark-read    |
+| `cf`    | `config`         | View and modify CLI configuration    |                                            |
+| `sh`    | `shell`          | Start an interactive shell           |                                            |
+| `vr`    | `version`        | Show version information             |                                            |
+| `hl`    | `help`           | Show help                            |                                            |
+| `cp`    | `completion`     | Generate shell completions           |                                            |
 
 ## Examples
 
@@ -119,9 +126,11 @@ pc ul report.pdf                # Upload to current directory
 pc dl report.pdf ./             # Download to current directory
 pc mv report.pdf archive/       # Move to archive folder
 pc mv -d old.txt new.txt        # Preview move (dry run)
-pc rm old-file.txt -y           # Delete with confirmation skipped
+pc rm old-file.txt              # Delete (moves to trash)
+pc rm -p old-file.txt           # Permanently delete
 pc rm -d important.txt          # Preview deletion (dry run)
 pc rs /.Trash/file.txt          # Restore from recycling bin
+pc et                           # Empty the recycling bin
 pc ct readme.txt -n 20          # Show first 20 lines
 pc op /Documents                # Open folder in browser
 
@@ -134,7 +143,21 @@ pc mk -p /projects/new/folder   # Create nested directories
 
 # Sharing
 pc sr /Projects teammate -p edit  # Share with edit permissions
+pc sr ls /Projects                # List share recipients
+pc sr rm /Projects teammate       # Remove a recipient
+pc sr inbox                       # List received shares
+pc sr decline /Shared owner       # Decline a received share
 pc in /Projects                   # View sharing info
+
+# Storage info
+pc st                           # Storage usage overview
+pc du                           # Breakdown by file type
+pc du -c                        # Cleanup suggestions
+
+# Activity log
+pc ac                           # Recent activity
+pc ac -u                        # Unread notifications only
+pc ac -m all                    # Mark all as read
 
 # Configuration
 pc cf list                      # Show all config

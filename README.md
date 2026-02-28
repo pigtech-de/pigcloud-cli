@@ -2,6 +2,12 @@
 
 A command-line interface for managing your PigCloud storage.
 
+PigCloud encrypts every file at rest with per-user keys, keeps file names
+obfuscated on disk, and gives you a familiar, Unix-style CLI to manage it all.
+No browser needed — upload, download, share, and organise files straight from
+your terminal. Two-letter aliases and an interactive shell keep common workflows
+fast, and `--json` output makes scripting easy.
+
 ## Installation
 
 ### Download Binary
@@ -11,7 +17,6 @@ Download the appropriate binary for your platform from the [releases page](https
 #### Linux / macOS
 
 ```bash
-# Download (replace with actual URL for your platform)
 curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.4.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo mv pigcloud pc /usr/local/bin/
@@ -19,7 +24,7 @@ sudo mv pigcloud pc /usr/local/bin/
 
 #### Windows
 
-Download the `.zip` from the releases page, extract, and add the directory to your PATH.
+Download the `.zip` from the releases page, extract it, and add the directory to your PATH.
 
 ### Build from Source
 
@@ -34,10 +39,11 @@ go build -o pigcloud .
 ## Quick Start
 
 ```bash
-# Login with your API key
+# Authenticate — paste your API key when prompted
+# (find it in the PigCloud web UI under Settings > API Keys)
 pigcloud login
 
-# List files
+# List files in the current directory
 pigcloud ls
 
 # Upload a file
@@ -46,9 +52,13 @@ pigcloud ul document.pdf /Documents/
 # Download a file
 pigcloud dl /Documents/document.pdf ./
 
-# Start interactive shell
+# Start an interactive shell session
 pigcloud shell
 ```
+
+Authentication is API-key based. Run `pigcloud login` and paste the key from
+your PigCloud account settings. The key is stored locally in your config file
+and sent as a header with every request. No OAuth flow or browser redirect needed.
 
 ## Commands
 
@@ -531,14 +541,30 @@ Display the version, commit hash, and build date of the CLI.
 ## Configuration
 
 Configuration is stored in:
-- Linux/macOS: `~/.config/pigcloud/config.json`
-- Windows: `%APPDATA%\pigcloud\config.json`
+- **Linux / macOS:** `~/.config/pigcloud/config.json`
+- **Windows:** `%APPDATA%\pigcloud\config.json`
+
+```json
+{
+  "api_key": "pc_live_abc123...",
+  "endpoint": "https://pigtech.de/cloud/actions.php",
+  "cwd": "/Documents"
+}
+```
 
 | Key | Description |
 |-----|-------------|
 | `api_key` | Your API key for authentication |
 | `endpoint` | The PigCloud API endpoint URL |
 | `cwd` | Current working directory in cloud storage |
+
+Manage config from the CLI:
+
+```bash
+pc cf list                        # Show all values
+pc cf get cwd                     # Get a single value
+pc cf set cwd /Documents          # Set a value
+```
 
 ## Global Flags
 
@@ -548,6 +574,17 @@ Configuration is stored in:
 | `-q, --quiet` | Suppress non-essential output |
 | `--config` | Use a specific config file |
 
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `Authentication required` | Run `pc login` to set your API key. Keys can be generated in the PigCloud web UI under Settings > API Keys. |
+| `Connection refused` / timeouts | Check your network and that the endpoint in `pc cf get endpoint` is reachable. |
+| Upload fails for large files | Files up to your plan's storage limit are supported. Check remaining space with `pc st`. |
+| `File not found` on a path you can see in the web UI | Your CLI working directory may differ. Run `pc wd` to check and `pc cd /` to reset. |
+| Destructive command anxiety | Use `-d` (dry run) on `rm` and `mv` to preview changes before committing. |
+
 ## License
 
-Copyright PigTech. All rights reserved.
+Copyright (c) PigTech. All rights reserved.
+See [LICENSE](LICENSE) for details.

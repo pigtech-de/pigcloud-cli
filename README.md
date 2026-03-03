@@ -2,11 +2,12 @@
 
 A command-line interface for managing your PigCloud storage.
 
-PigCloud encrypts every file at rest with per-user keys, keeps file names
-encrypted on disk, and gives you a familiar, Unix-style CLI to manage it all.
-No browser needed — upload, download, share, and organise files straight from
-your terminal. Two-letter aliases and an interactive shell keep common workflows
-fast, and `--json` output makes scripting easy.
+PigCloud provides **end-to-end encryption** — files are encrypted on your device
+before upload and decrypted locally after download. The server never sees
+plaintext. File names are also encrypted at rest with per-user keys. A familiar,
+Unix-style CLI lets you upload, download, share, and organise files straight from
+your terminal. Two-letter aliases and an interactive shell with tab-completion
+keep common workflows fast, and `--json` output makes scripting easy.
 
 ## Installation
 
@@ -42,7 +43,7 @@ Restart your terminal after adding to PATH.
 
 ### Build from Source
 
-Requires Go 1.21 or later.
+Requires Go 1.24 or later.
 
 ```bash
 cd cli
@@ -85,21 +86,29 @@ redirect needed.
 
 ## Security Model
 
-All encryption is **server-side**. The CLI communicates with the server over TLS;
-the server encrypts data before writing it to disk.
+PigCloud uses **end-to-end encryption (E2EE)** — the CLI encrypts files locally
+before upload and decrypts them locally after download. The server stores only
+ciphertext and never has access to plaintext content or data keys.
+
+### End-to-End Encryption
 
 | Layer | Algorithm | Details |
 |-------|-----------|---------|
-| File content | XChaCha20-Poly1305 (libsodium) | Streamed in 1 MB chunks. Per-file ephemeral data key, random nonce incremented per chunk. SHA-256 integrity check on decrypt. |
-| Data key wrapping | AES-256-GCM via Vault Transit | Each file's data key is wrapped by HashiCorp Vault. Never stored in plaintext. |
-| Metadata integrity | HMAC-SHA-256 via Vault Transit | Encryption metadata is signed and verified before any decrypt operation. |
-| File name encryption | AES-256-GCM (libsodium) | Non-deterministic — fresh random nonce per file. Names are never stored in plaintext. |
-| Path lookup | HMAC-SHA-256 | Canonical paths are hashed with a per-user key for O(1) lookups without revealing structure. |
-| Key storage | HashiCorp Vault KV | Per-user encryption and HMAC keys are generated independently (`random_bytes(32)`) and stored in Vault — not derived from the API key. |
+| File content | XChaCha20-Poly1305 (libsodium) | Streamed in 1 MB chunks. Per-file random data key, nonce incremented per chunk. SHA-256 integrity check on decrypt. |
+| Data key sealing | X25519 `crypto_box_seal` | Each file's data key is sealed to the user's public key. Only the user's private key can unseal it. |
+| Key pair | X25519 (Curve25519) | Generated at account setup. Private key encrypted with a password-derived key (Argon2id). |
+| File sharing | Re-seal per recipient | Data key is unsealed with sender's private key, then re-sealed with recipient's public key. |
 
-**What this does not cover:** encryption is not end-to-end. The server has access
-to plaintext during processing (uploads, downloads, thumbnail generation). If E2E
-encryption is a requirement for your threat model, PigCloud is not the right fit today.
+E2EE keys are set up on first login and cached locally. The private key remains
+encrypted at rest — it is only decrypted in memory when needed.
+
+### Server-Side Layers
+
+| Layer | Algorithm | Details |
+|-------|-----------|---------|
+| File name encryption | AES-256-GCM (libsodium) | Non-deterministic — fresh random nonce per name. Names are never stored in plaintext. |
+| Path lookup | HMAC-SHA-256 | Canonical paths are hashed with a per-user key for O(1) lookups without revealing structure. |
+| Key storage | HashiCorp Vault KV | Per-user name-encryption and HMAC keys stored in Vault — not derived from the API key. |
 
 ## Paths
 
@@ -601,7 +610,9 @@ Configuration is stored in:
 {
   "api_key": "pc_live_abc123...",
   "endpoint": "https://pigtech.de/cloud/actions.php",
-  "cwd": "/Documents"
+  "cwd": "/Documents",
+  "e2ee_public_key": "base64...",
+  "e2ee_private_key": "base64...(encrypted)"
 }
 ```
 
@@ -610,6 +621,7 @@ Configuration is stored in:
 | `api_key` | Your API key for authentication |
 | `endpoint` | The PigCloud API endpoint URL |
 | `cwd` | Current working directory in cloud storage |
+| `e2ee_*` | End-to-end encryption keys (fetched automatically on first use) |
 
 Manage config from the CLI:
 

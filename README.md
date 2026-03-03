@@ -3,7 +3,7 @@
 A command-line interface for managing your PigCloud storage.
 
 PigCloud encrypts every file at rest with per-user keys, keeps file names
-obfuscated on disk, and gives you a familiar, Unix-style CLI to manage it all.
+encrypted on disk, and gives you a familiar, Unix-style CLI to manage it all.
 No browser needed — upload, download, share, and organise files straight from
 your terminal. Two-letter aliases and an interactive shell keep common workflows
 fast, and `--json` output makes scripting easy.
@@ -14,17 +14,31 @@ fast, and `--json` output makes scripting easy.
 
 Download the appropriate binary for your platform from the [releases page](https://github.com/pigtech-de/pigcloud-cli/releases).
 
+Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand alias).
+
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.4.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.5.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
-sudo mv pigcloud pc /usr/local/bin/
+sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
 
 #### Windows
 
-Download the `.zip` from the releases page, extract it, and add the directory to your PATH.
+```powershell
+# Download and extract
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.5.0-windows-amd64.zip" -OutFile pigcloud.zip
+Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
+
+# Add to PATH (current user, persistent)
+$path = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($path -notlike "*$env:LOCALAPPDATA\pigcloud*") {
+    [Environment]::SetEnvironmentVariable("Path", "$path;$env:LOCALAPPDATA\pigcloud", "User")
+}
+```
+
+Restart your terminal after adding to PATH.
 
 ### Build from Source
 
@@ -56,9 +70,47 @@ pigcloud dl /Documents/document.pdf ./
 pigcloud shell
 ```
 
+### Authentication
+
 Authentication is API-key based. Run `pigcloud login` and paste the key from
 your PigCloud account settings. The key is stored locally in your config file
-and sent as a header with every request. No OAuth flow or browser redirect needed.
+and sent as a header with every request over HTTPS. No OAuth flow or browser
+redirect needed.
+
+- Each account has one active API key. Generating a new key revokes the previous one.
+- The key secret is hashed with Argon2id on the server — it cannot be recovered, only regenerated.
+- On Linux/macOS the config file is written with mode `0600` (owner-only). On Windows,
+  standard user-directory ACLs apply.
+- Treat your config file like an SSH private key: don't share it or commit it to version control.
+
+## Security Model
+
+All encryption is **server-side**. The CLI communicates with the server over TLS;
+the server encrypts data before writing it to disk.
+
+| Layer | Algorithm | Details |
+|-------|-----------|---------|
+| File content | XChaCha20-Poly1305 (libsodium) | Streamed in 1 MB chunks. Per-file ephemeral data key, random nonce incremented per chunk. SHA-256 integrity check on decrypt. |
+| Data key wrapping | AES-256-GCM via Vault Transit | Each file's data key is wrapped by HashiCorp Vault. Never stored in plaintext. |
+| Metadata integrity | HMAC-SHA-256 via Vault Transit | Encryption metadata is signed and verified before any decrypt operation. |
+| File name encryption | AES-256-GCM (libsodium) | Non-deterministic — fresh random nonce per file. Names are never stored in plaintext. |
+| Path lookup | HMAC-SHA-256 | Canonical paths are hashed with a per-user key for O(1) lookups without revealing structure. |
+| Key storage | HashiCorp Vault KV | Per-user encryption and HMAC keys are generated independently (`random_bytes(32)`) and stored in Vault — not derived from the API key. |
+
+**What this does not cover:** encryption is not end-to-end. The server has access
+to plaintext during processing (uploads, downloads, thumbnail generation). If E2E
+encryption is a requirement for your threat model, PigCloud is not the right fit today.
+
+## Paths
+
+Commands that take paths distinguish between **remote** (cloud) and **local** (OS) paths:
+
+- **Remote paths** are Unix-style and absolute (`/Documents/report.pdf`) or relative
+  to the current cloud working directory (`report.pdf`). Use `pc wd` to see it,
+  `pc cd` to change it.
+- **Local paths** are your OS file system paths (`./downloads/`, `C:\Users\...`).
+- In `ul` and `dl`, the first argument is always the **source** and the second
+  is the **destination**. `ul` takes local then remote; `dl` takes remote then local.
 
 ## Commands
 
@@ -77,15 +129,15 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | Command | Alias | Description | Flags |
 |---------|-------|-------------|-------|
 | `cd` | — | Change working directory |  |
-| `fd` | `find` | Find files by name | ` [-n] [-t]` |
+| `fd` | `find` | Find files by name | ` [-a] [-n] [-t]` |
 | `fv` | `favorite` | Manage favorites |  |
 | `fv add` |  | Add a path to favorites |  |
 | `fv list` |  | List all favorites |  |
 | `fv rm` |  | Remove a path from favorites |  |
 | `in` | `info` | Show file or directory info |  |
-| `ls` | `list` | List files and directories | ` [-l] [-r] [-S] [-t]` |
+| `ls` | `list` | List files and directories | ` [-a] [-n] [-l] [-o] [-r] [-S] [-t]` |
 | `op` | `open` | Open a file or folder in the browser |  |
-| `tr` | `tree` | Display directory tree | ` [-d] [-D]` |
+| `tr` | `tree` | Display directory tree | ` [-a] [-d] [-D]` |
 | `wd` | `pwd` | Print working directory |  |
 
 ### File Operations
@@ -94,14 +146,14 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 |---------|-------|-------------|-------|
 | `cp` | `copy` | Copy a file or directory | ` [-d]` |
 | `ct` | `cat` | Display file content | ` [--head] [-n] [-t]` |
-| `dl` | `download` | Download a file or folder from cloud storage | ` [-x]` |
+| `dl` | `download` | Download a file or folder from cloud storage | ` [-x] [--overwrite] [--skip-existing]` |
 | `et` | `empty` | Empty the recycling bin | ` [-f]` |
 | `mk` | `mkdir` | Create a new directory | ` [-p]` |
 | `mv` | `move` | Move or rename a file/directory | ` [-d]` |
 | `rm` | `remove` | Delete a file or directory | ` [-d] [-f] [-p]` |
 | `rs` | `restore` | Restore an item from the recycling bin |  |
-| `tb` | `trash` | List recycling bin contents |  |
-| `ul` | `upload` | Upload a file or directory to cloud storage |  |
+| `tb` | `trash` | List recycling bin contents | ` [-S] [-t]` |
+| `ul` | `upload` | Upload a file or directory to cloud storage | ` [-j] [--skip-existing]` |
 | `vh` | `versions` | View and manage file version history |  |
 | `vh restore` |  | Restore a file to a specific version |  |
 | `vh rm` |  | Delete a specific version |  |
@@ -124,7 +176,7 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 
 | Command | Alias | Description | Flags |
 |---------|-------|-------------|-------|
-| `ac` | `activity` | View activity log and notifications | ` [-n] [-m] [-u]` |
+| `ac` | `activity` | View activity log and notifications | ` [-n] [-m] [-o] [-u]` |
 | `cf` | `config` | Manage CLI configuration |  |
 | `cf get` |  | Get a configuration value |  |
 | `cf list` | `ls` | Show all configuration values |  |
@@ -520,6 +572,7 @@ Start an interactive shell for running multiple commands.
 
 The shell shows your current working directory in the prompt.
 Type 'exit' or 'quit' to leave the shell.
+Press Ctrl+C to cancel the current line, Ctrl+D to exit.
 
 Example session:
   / > ls

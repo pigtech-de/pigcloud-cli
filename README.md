@@ -20,7 +20,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.5.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.6.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -29,7 +29,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.5.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.6.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -171,6 +171,12 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 
 | Command | Alias | Description | Flags |
 |---------|-------|-------------|-------|
+| `fr` | `friend` | Manage friends |  |
+| `fr accept` |  | Accept a friend request |  |
+| `fr add` |  | Send a friend request |  |
+| `fr decline` |  | Decline a friend request |  |
+| `fr pending` |  | List pending friend requests |  |
+| `fr rm` |  | Remove a friend |  |
 | `pl` | `link` | Create and manage public links | ` [-e] [--max-downloads] [-P]` |
 | `pl get` |  | Show public link details |  |
 | `pl rm` |  | Revoke a public link |  |
@@ -207,7 +213,7 @@ Authenticate with your PigCloud API key.
 You can find your API key in the PigCloud web interface under Settings > API Keys.
 The API key will be stored securely in your local configuration file.
 
-If no API key is provided as an argument, you will be prompted to enter it.
+You will be prompted to enter your API key securely (input is hidden).
 
 
 ```bash
@@ -428,6 +434,19 @@ Subcommands:
 pc vh /report.pdf                # List versions
 pc vh restore /report.pdf 42     # Restore version #42
 pc vh rm 42                      # Delete version #42
+```
+
+
+### `fr` (friend) — Manage friends
+
+
+```bash
+pc fr                    # List your friends
+pc fr add alice           # Send a friend request
+pc fr accept alice        # Accept a friend request
+pc fr decline alice       # Decline a friend request
+pc fr rm alice            # Remove a friend
+pc fr pending             # List pending friend requests
 ```
 
 

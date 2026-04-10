@@ -20,7 +20,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.6.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.7.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -29,7 +29,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.6.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.7.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -146,6 +146,7 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | `in` | `info` | Show file or directory info |  |
 | `ls` | `list` | List files and directories | ` [-a] [-n] [-l] [-o] [-r] [-S] [-t]` |
 | `op` | `open` | Open a file or folder in the browser |  |
+| `rc` | `recents` | List recently accessed files | ` [-l]` |
 | `tr` | `tree` | Display directory tree | ` [-a] [-d] [-D]` |
 | `wd` | `pwd` | Print working directory |  |
 
@@ -155,13 +156,19 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 |---------|-------|-------------|-------|
 | `cp` | `copy` | Copy a file or directory | ` [-d]` |
 | `ct` | `cat` | Display file content | ` [--head] [-n] [-t]` |
-| `dl` | `download` | Download a file or folder from cloud storage | ` [-x] [--overwrite] [--skip-existing]` |
+| `dl` | `download` | Download a file or folder from cloud storage | ` [-x] [--overwrite] [--skip-existing] [-z]` |
 | `et` | `empty` | Empty the recycling bin | ` [-f]` |
+| `hd` | `hide` | Hide or unhide files and folders |  |
+| `hd list` |  | List all hidden items |  |
+| `hd off` |  | Unhide a file or folder |  |
+| `hd on` |  | Hide a file or folder |  |
 | `mk` | `mkdir` | Create a new directory | ` [-p]` |
 | `mv` | `move` | Move or rename a file/directory | ` [-d]` |
 | `rm` | `remove` | Delete a file or directory | ` [-d] [-f] [-p]` |
 | `rs` | `restore` | Restore an item from the recycling bin |  |
+| `sy` | `sync` | Synchronize a local directory with cloud storage | ` [--delete] [-n] [-j] [--pull] [--push] [-v]` |
 | `tb` | `trash` | List recycling bin contents | ` [-S] [-t]` |
+| `tc` | `touch` | Create a new text file | ` [-c]` |
 | `ul` | `upload` | Upload a file or directory to cloud storage | ` [-j] [--skip-existing]` |
 | `vh` | `versions` | View and manage file version history |  |
 | `vh restore` |  | Restore a file to a specific version |  |
@@ -171,6 +178,11 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 
 | Command | Alias | Description | Flags |
 |---------|-------|-------------|-------|
+| `ch` | `chat` | Send and receive E2EE chat messages | ` [--before] [-n]` |
+| `ch read` |  | Mark conversation as read |  |
+| `ch rm` |  | Delete a sent message |  |
+| `ch send` |  | Send a chat message or share a file | ` [-f]` |
+| `ch unread` |  | Show unread message counts |  |
 | `fr` | `friend` | Manage friends |  |
 | `fr accept` |  | Accept a friend request |  |
 | `fr add` |  | Send a friend request |  |
@@ -181,11 +193,13 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | `pl get` |  | Show public link details |  |
 | `pl rm` |  | Revoke a public link |  |
 | `pl set` |  | Update public link settings | ` [-e] [--max-downloads] [-P] [--remove-expiration] [--remove-max-downloads] [--remove-password]` |
-| `sr` | `share` | Manage shared folders | ` [-p]` |
+| `sr` | `share` | Manage shared files and folders | ` [-f] [-p]` |
+| `sr accept` |  | Accept a pending share |  |
 | `sr decline` |  | Decline a received share |  |
 | `sr inbox` |  | List shares you've received from others |  |
 | `sr ls` |  | List share recipients for a folder |  |
 | `sr rm` |  | Remove a specific share recipient |  |
+| `sr set` |  | Update share settings (permission, password, expiry) | ` [-e] [-P] [-p] [--remove-expiration] [--remove-password] [-u]` |
 
 ### Info & Tools
 
@@ -297,6 +311,17 @@ pc op /photos                     # Open the photos folder
 ```
 
 
+### `rc` (recents) — List recently accessed files
+
+Show files and folders you've recently opened or accessed.
+
+
+```bash
+pc rc              # List recent items
+pc rc -l 10        # Show last 10 recent items
+```
+
+
 ### `tr` (tree) — Display directory tree
 
 Display a tree view of directories and files.
@@ -326,15 +351,18 @@ Flags:
 Download a file or folder from your cloud storage.
 
 If local-path is not specified, downloads to the current directory.
-Folders are downloaded as ZIP archives.
 
 Use --extract (-x) to download a folder's contents as individual files,
 preserving the directory structure locally instead of creating a ZIP.
+
+Use --zip (-z) to download a folder's contents into a local ZIP archive.
+Files are decrypted before being added to the archive.
 
 
 ```bash
 pc dl /Documents/report.pdf ./       # Download a file
 pc dl /Documents ./docs -x              # Download folder contents individually
+pc dl /Documents ./backup.zip --zip     # Download folder as ZIP archive
 ```
 
 
@@ -391,6 +419,26 @@ pc rs /.Trash/document.txt       # Restore from recycling bin
 ```
 
 
+### `sy` (sync) — Synchronize a local directory with cloud storage
+
+Synchronize files between a local directory and your cloud storage.
+
+By default, performs bidirectional sync: uploads new/changed local files
+and downloads new/changed remote files. Use --push or --pull to restrict
+the direction.
+
+Files are compared by size and modification time. A file is considered
+changed when its size differs from the other side.
+
+
+```bash
+pc sy ./project /Backups/project         # Bidirectional sync
+pc sy ./photos /Photos --push            # Upload only (local → cloud)
+pc sy ./docs /Documents --pull           # Download only (cloud → local)
+pc sy . /Work --delete --dry-run         # Preview sync with deletions
+```
+
+
 ### `tb` (trash) — List recycling bin contents
 
 Show all items currently in the recycling bin with their original paths, sizes, and deletion dates.
@@ -402,6 +450,24 @@ Use 'rs' to restore items or 'et' to empty the bin.
 pc tb                             # List trash contents
 pc rs /.Trash/document.txt        # Restore an item
 pc et                             # Empty the bin
+```
+
+
+### `tc` (touch) — Create a new text file
+
+Create a new text file in your cloud storage.
+
+Content can be provided via --content flag or piped from stdin.
+The file is encrypted client-side before upload (E2EE).
+
+If no extension is given, .txt is appended automatically.
+Only text file types are allowed.
+
+
+```bash
+pc tc notes.txt /Documents --content "Hello world"
+echo "piped content" | pc tc log.txt /Logs
+pc tc readme.md --content "# Title"
 ```
 
 
@@ -434,6 +500,35 @@ Subcommands:
 pc vh /report.pdf                # List versions
 pc vh restore /report.pdf 42     # Restore version #42
 pc vh rm 42                      # Delete version #42
+```
+
+
+### `ch` (chat) — Send and receive E2EE chat messages
+
+Encrypted chat with other PigCloud users (requires friendship).
+
+When called with no arguments, lists conversations.
+With a username, shows recent messages.
+With a username and message, sends a message.
+
+Use subcommands for more control:
+
+  ch                           List conversations
+  ch <username>                Show messages
+  ch <username> "hello"        Send a message (shorthand)
+  ch send <user> "message"     Send (explicit, supports stdin pipe)
+  ch send <user> -f /file      Share a file in chat
+  ch rm <message-id>           Delete own message
+  ch read <username>           Mark conversation as read
+  ch unread                    Show unread counts
+
+
+```bash
+pc ch                            # List conversations
+pc ch alice                      # Show messages with alice
+pc ch alice "hello!"             # Send message to alice
+echo "hi" | pc ch send alice     # Pipe message
+pc ch send alice -f /Photos      # Share a file
 ```
 
 
@@ -473,21 +568,31 @@ pc pl rm /report.pdf                      # Revoke link
 ```
 
 
-### `sr` (share) — Manage shared folders
+### `sr` (share) — Manage shared files and folders
 
-Share folders with other PigCloud users.
+Share files and folders with other PigCloud users.
 
 When called with <path> and <username>, toggles sharing.
 Use subcommands for more control:
 
   sr ls <path>                  List share recipients
   sr rm <path> <username>       Remove a specific recipient
+  sr set <path>                 Update share settings
   sr inbox                      List shares you've received
+  sr accept <path> <owner>      Accept a pending share
   sr decline <path> <owner>     Decline a received share
 
 
 ```bash
 pc sr /Shared team-member        # Share a folder
+```
+
+
+#### `sr accept` — Accept a pending share
+
+
+```bash
+pc sr accept /Documents alice     # Accept a share from alice
 ```
 
 
@@ -497,6 +602,22 @@ pc sr /Shared team-member        # Share a folder
 ```bash
 pc sr inbox                      # Show folders shared with you
 ```
+
+
+#### `sr set` — Update share settings (permission, password, expiry)
+
+Update settings on an existing share.
+
+Update a recipient's permission level:
+  sr set /Docs -u bob -p edit
+
+Set or change share password/expiration:
+  sr set /Docs --password secret123
+  sr set /Docs --expires "2026-12-31"
+
+Remove password/expiration:
+  sr set /Docs --remove-password
+  sr set /Docs --remove-expiration
 
 
 ### `ac` (activity) — View activity log and notifications
@@ -523,23 +644,26 @@ Subcommands:
   set        Set a configuration value
 
 Valid configuration keys:
-  api_key   - Your API key for authentication
-  endpoint  - The PigCloud API endpoint URL
-  cwd       - Current working directory in cloud storage
+  api_key       - Your API key for authentication
+  endpoint      - The PigCloud API endpoint URL
+  cwd           - Current working directory in cloud storage
+  default_json  - Always output JSON (true/false)
+  default_quiet - Suppress non-essential output (true/false)
+  no_color      - Disable colored output (true/false)
 
 
 #### `cf get` — Get a configuration value
 
 Get a specific configuration value.
 
-Valid keys: api_key, endpoint, cwd
+Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color
 
 
 #### `cf set` — Set a configuration value
 
 Set a configuration value.
 
-Valid keys: api_key, endpoint, cwd
+Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color
 
 
 ```bash

@@ -24,7 +24,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.8.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.9.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +33,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.8.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.9.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -148,7 +148,7 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | Command | Alias | Description | Flags |
 |---------|-------|-------------|-------|
 | `cd` | — | Change working directory |  |
-| `fd` | `find` | Find files by name | ` [-a] [-n] [-t]` |
+| `fd` | `find` | Find files by name | ` [-a] [-F] [-i] [-n] [-E] [-t]` |
 | `ls` | `list` | List files and directories | ` [-a] [-n] [-l] [-o] [-r] [-S] [-t]` |
 | `tr` | `tree` | Display directory tree | ` [-a] [-d] [-D]` |
 | `wd` | `pwd` | Print working directory |  |
@@ -165,21 +165,28 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | `fv add` |  | Add a path to favorites |  |
 | `fv ls` |  | List all favorites |  |
 | `fv rm` |  | Remove a path from favorites |  |
-| `gr` | `grep` | Search inside encrypted files | ` [-l] [-i] [-m] [-r]` |
+| `gr` | `grep` | Search inside encrypted files | ` [-l] [-F] [-i] [-m] [-r] [-E]` |
 | `hd` | `hide` | Hide or unhide files and folders |  |
 | `hd add` |  | Hide a file or folder |  |
 | `hd ls` |  | List all hidden items |  |
 | `hd rm` |  | Unhide a file or folder |  |
 | `mk` | `mkdir` | Create a new directory | ` [-p]` |
+| `mn` | `mount` | Mount cloud storage as a local drive |  |
+| `mn clean` |  | Remove rejected (unsyncable) files from mount |  |
+| `mn files` |  | Show per-file sync status | ` [--issues] [--tr] [--tree]` |
+| `mn mv` |  | Move the sync folder to a different location | ` [-d] [-f]` |
+| `mn pin` |  | Pin a file or folder for offline access | ` [--list] [--remove]` |
+| `mn start` |  | Start the mount daemon | ` [--cache-size] [--poll-interval] [--read-only] [--virtual]` |
+| `mn status` |  | Show mount status and cache statistics |  |
+| `mn stop` | `unmount` | Stop the mount daemon and unmount |  |
 | `mv` | `move` | Move or rename a file/directory | ` [-d]` |
 | `rm` | `remove` | Delete a file or directory | ` [-d] [-f] [-p]` |
 | `rs` | `restore` | Restore an item from the recycling bin |  |
-| `sy` | `sync` | Synchronize a local directory with cloud storage | ` [--delete] [-n] [-j] [--pull] [--push] [-v]` |
 | `tb` | `trash` | Manage recycling bin | ` [-S] [-t]` |
 | `tb empty` |  | Permanently delete all items in the recycling bin | ` [-f]` |
 | `tb ls` |  | List recycling bin contents |  |
 | `tc` | `touch` | Create a new text file | ` [-c]` |
-| `ul` | `upload` | Upload a file or directory to cloud storage | ` [-j] [--skip-existing]` |
+| `ul` | `upload` | Upload a file or directory to cloud storage | ` [-f] [-j] [--skip-existing]` |
 | `vh` | `versions` | View and manage file version history |  |
 | `vh dl` |  | Download a specific version |  |
 | `vh prune` |  | Delete all but the last N versions | ` [-k]` |
@@ -229,7 +236,7 @@ Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
 | `cm` | `completion` | Generate shell completion scripts |  |
 | `du` | `usage` | Show storage breakdown by file type |  |
 | `hl` | `help` | Show help for commands | ` [-v]` |
-| `in` | `info` | Show file or directory info | ` [--hash]` |
+| `in` | `info` | Show file or directory info |  |
 | `op` | `open` | Open a file or folder in the browser |  |
 | `rc` | `recents` | List recently accessed files | ` [-l]` |
 | `sh` | `shell` | Start an interactive shell |  |
@@ -315,15 +322,19 @@ Use '..' to go up one directory, or '/' to go to root.
 
 Search for files and directories matching a pattern.
 
-The pattern supports wildcards:
+By default the pattern uses glob matching:
   * matches any characters
   ? matches a single character
 
+Use -E for regex matching or -F for literal substring matching.
+
 
 ```bash
-pc fd "*.pdf"                     # Search for PDF files
-pc fd "report*" /docs              # Search in /docs folder
-pc fd -t d "project"               # Search for directories only
+pc fd "*.pdf"                     # Glob: find PDF files
+pc fd "report*" /docs              # Glob: search in /docs
+pc fd -t d "project"               # Glob: directories only
+pc fd -E "report_\d{4}" /docs      # Regex: report_2024 etc.
+pc fd -Fi "readme" /               # Fixed: case-insensitive substring
 ```
 
 
@@ -428,13 +439,17 @@ Search for a pattern inside encrypted file contents.
 Downloads each text file, decrypts client-side, and searches for matches.
 Only text files are searched (binary files are skipped).
 
+By default the pattern is a regular expression. Use -F for literal
+substring matching or -E to be explicit about regex mode.
+
 This is slower than local grep because each file must be downloaded and
 decrypted. Use a specific path to narrow the search scope.
 
 
 ```bash
-pc gr "TODO" /Documents       # Search in /Documents
-pc gr -r "password" /         # Recursive search from root
+pc gr "TODO" /Documents       # Regex: search in /Documents
+pc gr -r "func\s+\w+" /src    # Regex: recursive function search
+pc gr -F "fmt.Println" /src   # Fixed: literal substring match
 pc gr -l "API_KEY" /configs   # Show matching file names only
 pc gr -i "error" /logs        # Case-insensitive search
 ```
@@ -464,6 +479,47 @@ By default, the parent directory must already exist.
 Use -p to create parent directories as needed.
 
 
+### `mn` (mount) — Mount cloud storage as a local drive
+
+Mount your PigCloud storage as a local filesystem.
+
+Run 'pc mn' to check mount status. Use 'pc mn start' to mount.
+
+Sync mode (default): files are downloaded to a local folder and kept in sync
+bidirectionally. The folder is mapped as a drive letter (Windows) or symlink
+(Linux/macOS). Reads and writes are instant — no network latency.
+
+Virtual mode (--virtual): FUSE/WinFsp network-backed mount where files are
+fetched on demand. Lower disk usage but higher latency.
+
+Requires unlocked encryption keys (run 'pc uk' first).
+
+
+```bash
+pc mn                        # Show mount status
+pc mn start /Photos P:       # Sync /Photos to P: drive (fast, local files)
+pc mn start /Photos P: --virtual  # Virtual mount (network-backed)
+pc mn start                  # Sync root at default location
+pc mn stop                   # Unmount and stop sync
+pc mn files --tree           # Show synced files as a tree
+pc mn files --issues         # Show files with sync problems
+```
+
+
+#### `mn mv` — Move the sync folder to a different location
+
+Move the local sync folder to a new directory. The mount daemon will be
+stopped during the move and restarted afterward.
+
+Use -f to skip the confirmation prompt.
+
+
+```bash
+pc mn mv -d D:\PigCloud
+pc mn mv -d /mnt/data/pigcloud -f
+```
+
+
 ### `mv` (move) — Move or rename a file/directory
 
 Move a file or directory to a new location, or rename it.
@@ -479,7 +535,7 @@ Flags:
 
 Delete a file or directory from your cloud storage.
 
-By default, items are moved to the recycling bin (.Trash folder) and can be restored later.
+By default, items are moved to the recycling bin and can be restored later.
 Items in the recycling bin are automatically deleted after 30 days.
 
 Use --permanent to bypass the recycling bin and delete immediately.
@@ -492,35 +548,16 @@ Flags:
 
 ### `rs` (restore) — Restore an item from the recycling bin
 
-Restore a file or directory from the recycling bin (.Trash folder) to its original location.
+Restore a file or directory from the recycling bin to its original location.
 
-The item will be moved back to where it was before deletion. If the original
-location no longer exists or contains an item with the same name, the restore
-will fail.
-
-
-```bash
-pc rs /.Trash/document.txt       # Restore from recycling bin
-```
-
-
-### `sy` (sync) — Synchronize a local directory with cloud storage
-
-Synchronize files between a local directory and your cloud storage.
-
-By default, performs bidirectional sync: uploads new/changed local files
-and downloads new/changed remote files. Use --push or --pull to restrict
-the direction.
-
-Files are compared by size and modification time. A file is considered
-changed when its size differs from the other side.
+Accepts either a path ('/photo.jpg') or a 32-char hex node ID from 'pc tb ls'.
+Paths are resolved against the recycling bin; if multiple deleted items share
+the same name, you'll be asked which to restore.
 
 
 ```bash
-pc sy ./project /Backups/project         # Bidirectional sync
-pc sy ./photos /Photos --push            # Upload only (local → cloud)
-pc sy ./docs /Documents --pull           # Download only (cloud → local)
-pc sy . /Work --delete --dry-run         # Preview sync with deletions
+pc rs /report.pdf                 # Restore by path (prompts on collision)
+pc rs abc123def456...           # Restore by node ID from 'pc tb' output
 ```
 
 
@@ -528,13 +565,13 @@ pc sy . /Work --delete --dry-run         # Preview sync with deletions
 
 Show all items in the recycling bin.
 
-Use 'rs' to restore items or 'tb empty' to empty the bin.
+Use 'rs <node-id>' to restore items or 'tb empty' to empty the bin.
 
 
 ```bash
-pc tb                             # List trash contents
-pc rs /.Trash/document.txt        # Restore an item
-pc tb empty                       # Empty the bin
+pc tb                    # List trash contents
+pc rs <node-id>          # Restore an item by node ID
+pc tb empty              # Empty the bin
 ```
 
 

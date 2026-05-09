@@ -24,7 +24,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.9.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.10.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +33,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.9.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.10.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -132,123 +132,131 @@ Commands that take paths distinguish between **remote** (cloud) and **local** (O
 ## Commands
 
 Use `pc` as a shorthand for `pigcloud`. All commands have two-letter aliases.
+The same tree is shown by `pc hl` at runtime.
 
-### Authentication
+```text
+COMMANDS
 
-| Command | Alias | Description | Flags |
-|---------|-------|-------------|-------|
-| `li` | `login` | Authenticate with your API key |  |
-| `lk` | `lock` | Lock encryption keys |  |
-| `lo` | `logout` | Remove stored credentials |  |
-| `uk` | `unlock` | Unlock encryption keys for this session | ` [-t]` |
-| `wh` | `whoami` | Show current user info |  |
+├── Authentication
+│   ├── li, login        Authenticate with your API key
+│   ├── lk, lock         Lock encryption keys
+│   ├── lo, logout       Remove stored credentials
+│   ├── uk, unlock       Unlock encryption keys for this session [-t]
+│   └── wh, whoami       Show current user info
 
-### Navigation
+├── Navigation
+│   ├── cd               Change working directory
+│   ├── fd, find         Find files by name [-a] [-F] [-i] [-n] [-E] [-t]
+│   ├── ls, list         List files and directories [-a] [-n] [-l] [-o] [-r] [-S] [-t]
+│   ├── tr, tree         Display directory tree [-a] [-d] [-D]
+│   └── wd, pwd          Print working directory
 
-| Command | Alias | Description | Flags |
-|---------|-------|-------------|-------|
-| `cd` | — | Change working directory |  |
-| `fd` | `find` | Find files by name | ` [-a] [-F] [-i] [-n] [-E] [-t]` |
-| `ls` | `list` | List files and directories | ` [-a] [-n] [-l] [-o] [-r] [-S] [-t]` |
-| `tr` | `tree` | Display directory tree | ` [-a] [-d] [-D]` |
-| `wd` | `pwd` | Print working directory |  |
+├── File Operations
+│   ├── cp, copy         Copy a file or directory [-d]
+│   ├── ct, cat          Display file content [--head] [-n] [-t]
+│   ├── df, diff         Diff a file between versions
+│   ├── dl, download     Download a file or folder from cloud storage [-x] [--overwrite] [--skip-existing] [-z]
+│   ├── fv, favorite     Manage favorites
+│   │   ├── add          Add a path to favorites
+│   │   ├── ls           List all favorites
+│   │   └── rm           Remove a path from favorites
+│   │
+│   ├── gr, grep         Search inside encrypted files [-l] [-F] [-i] [-m] [-r] [-E]
+│   ├── hd, hide         Hide or unhide files and folders
+│   │   ├── add          Hide a file or folder
+│   │   ├── ls           List all hidden items
+│   │   └── rm           Unhide a file or folder
+│   │
+│   ├── mk, mkdir        Create a new directory [-p]
+│   ├── mn, mount        Mount cloud storage as a local drive
+│   │   ├── clean        Remove rejected (unsyncable) files from mount
+│   │   ├── files        Show per-file sync status [--issues] [--tree]
+│   │   ├── mv           Move the sync folder to a different location [-d] [-f]
+│   │   ├── pin          Pin a file or folder for offline access [--list] [--remove]
+│   │   ├── start        Start the mount daemon [--cache-size] [--poll-interval] [--read-only] [--virtual]
+│   │   ├── status       Show mount status and cache statistics
+│   │   └── stop         Stop the mount daemon and unmount
+│   │
+│   ├── mv, move         Move or rename a file/directory [-d]
+│   ├── rm, remove       Delete a file or directory [-d] [-f] [-p]
+│   ├── rs, restore      Restore an item from the recycling bin
+│   ├── tb, trash        Manage recycling bin [-S] [-t]
+│   │   ├── empty        Permanently delete all items in the recycling bin [-f]
+│   │   └── ls           List recycling bin contents
+│   │
+│   ├── tc, touch        Create a new text file [-c]
+│   ├── ul, upload       Upload a file or directory to cloud storage [-f] [-j] [--skip-existing]
+│   └── vh, versions     View and manage file version history
+│       ├── dl           Download a specific version
+│       ├── prune        Delete all but the last N versions [-k]
+│       ├── rm           Delete a specific version [-f]
+│       └── rs           Restore a file to a specific version
 
-### File Operations
+├── Sharing
+│   ├── ch, chat         Send and receive E2EE chat messages [--before] [-n]
+│   │   ├── ls           List conversations
+│   │   ├── read         Mark conversation as read
+│   │   ├── rm           Delete a sent message
+│   │   ├── send         Send a chat message or share a file [-f]
+│   │   └── unread       Show unread message counts
+│   │
+│   ├── fr, friend       Manage friends
+│   │   ├── accept       Accept a friend request
+│   │   ├── add          Send a friend request
+│   │   ├── decline      Decline a friend request
+│   │   ├── ls           List your friends
+│   │   ├── pending      List pending friend requests
+│   │   └── rm           Remove a friend
+│   │
+│   ├── pl, link         Create and manage public links
+│   │   ├── add          Create a public link [-e] [--max-downloads] [-P]
+│   │   ├── ls           List all public links
+│   │   ├── rm           Revoke a public link [-f]
+│   │   └── set          Update public link settings [-e] [--max-downloads] [-P] [--remove-expiration] [--remove-max-downloads] [--remove-password]
+│   │
+│   └── sr, share        Manage shared files and folders
+│       ├── accept       Accept a pending share
+│       ├── add          Share a folder with a user [-f] [-p]
+│       ├── decline      Decline a received share
+│       ├── inbox        List shares you've received from others
+│       ├── ls           List share recipients for a folder
+│       ├── rm           Remove a specific share recipient [-f]
+│       └── set          Update share settings (permission, password, expiry) [-e] [-P] [-p] [--remove-expiration] [--remove-password] [-u]
 
-| Command | Alias | Description | Flags |
-|---------|-------|-------------|-------|
-| `cp` | `copy` | Copy a file or directory | ` [-d]` |
-| `ct` | `cat` | Display file content | ` [--head] [-n] [-t]` |
-| `df` | `diff` | Diff a file between versions |  |
-| `dl` | `download` | Download a file or folder from cloud storage | ` [-x] [--overwrite] [--skip-existing] [-z]` |
-| `fv` | `favorite` | Manage favorites |  |
-| `fv add` |  | Add a path to favorites |  |
-| `fv ls` |  | List all favorites |  |
-| `fv rm` |  | Remove a path from favorites |  |
-| `gr` | `grep` | Search inside encrypted files | ` [-l] [-F] [-i] [-m] [-r] [-E]` |
-| `hd` | `hide` | Hide or unhide files and folders |  |
-| `hd add` |  | Hide a file or folder |  |
-| `hd ls` |  | List all hidden items |  |
-| `hd rm` |  | Unhide a file or folder |  |
-| `mk` | `mkdir` | Create a new directory | ` [-p]` |
-| `mn` | `mount` | Mount cloud storage as a local drive |  |
-| `mn clean` |  | Remove rejected (unsyncable) files from mount |  |
-| `mn files` |  | Show per-file sync status | ` [--issues] [--tr] [--tree]` |
-| `mn mv` |  | Move the sync folder to a different location | ` [-d] [-f]` |
-| `mn pin` |  | Pin a file or folder for offline access | ` [--list] [--remove]` |
-| `mn start` |  | Start the mount daemon | ` [--cache-size] [--poll-interval] [--read-only] [--virtual]` |
-| `mn status` |  | Show mount status and cache statistics |  |
-| `mn stop` | `unmount` | Stop the mount daemon and unmount |  |
-| `mv` | `move` | Move or rename a file/directory | ` [-d]` |
-| `rm` | `remove` | Delete a file or directory | ` [-d] [-f] [-p]` |
-| `rs` | `restore` | Restore an item from the recycling bin |  |
-| `tb` | `trash` | Manage recycling bin | ` [-S] [-t]` |
-| `tb empty` |  | Permanently delete all items in the recycling bin | ` [-f]` |
-| `tb ls` |  | List recycling bin contents |  |
-| `tc` | `touch` | Create a new text file | ` [-c]` |
-| `ul` | `upload` | Upload a file or directory to cloud storage | ` [-f] [-j] [--skip-existing]` |
-| `vh` | `versions` | View and manage file version history |  |
-| `vh dl` |  | Download a specific version |  |
-| `vh prune` |  | Delete all but the last N versions | ` [-k]` |
-| `vh rm` |  | Delete a specific version | ` [-f]` |
-| `vh rs` |  | Restore a file to a specific version |  |
+└── Info & Tools
+    ├── ac, activity     View activity log and notifications [-n] [-m] [-o] [-u]
+    ├── cf, config       Manage CLI configuration
+    │   ├── get          Get a configuration value
+    │   ├── ls           Show all configuration values
+    │   └── set          Set a configuration value
+    │
+    ├── cm, completion   Generate shell completion scripts
+    ├── du, usage        Show storage breakdown by file type
+    ├── hl, help         Show help for commands [-v]
+    ├── in, info         Show file or directory info
+    ├── op, open         Open a file or folder in the browser
+    ├── rc, recents      List recently accessed files [-l]
+    ├── sh, shell        Start an interactive shell
+    ├── ss, sessions     Manage active sessions and devices
+    │   ├── devices      List trusted devices
+    │   ├── forget       Remove a trusted device
+    │   ├── ls           List active sessions and devices
+    │   ├── revoke       Revoke an active session
+    │   └── revoke-all   Revoke all other sessions
+    │
+    ├── st, stats        Show storage statistics
+    ├── vr, version      Show version information
+    └── xp, export       Export all personal data [-o]
 
-### Sharing
+GLOBAL FLAGS
+    --config       Use custom config file path
+    --json         Output in JSON format
+    --no-color     Disable colored output
+    -q, --quiet    Suppress non-essential output
+    --version      Show version
+```
 
-| Command | Alias | Description | Flags |
-|---------|-------|-------------|-------|
-| `ch` | `chat` | Send and receive E2EE chat messages | ` [--before] [-n]` |
-| `ch ls` |  | List conversations |  |
-| `ch read` |  | Mark conversation as read |  |
-| `ch rm` |  | Delete a sent message |  |
-| `ch send` |  | Send a chat message or share a file | ` [-f]` |
-| `ch unread` |  | Show unread message counts |  |
-| `fr` | `friend` | Manage friends |  |
-| `fr accept` |  | Accept a friend request |  |
-| `fr add` |  | Send a friend request |  |
-| `fr decline` |  | Decline a friend request |  |
-| `fr ls` |  | List your friends |  |
-| `fr pending` |  | List pending friend requests |  |
-| `fr rm` |  | Remove a friend |  |
-| `pl` | `link` | Create and manage public links |  |
-| `pl add` |  | Create a public link | ` [-e] [--max-downloads] [-P]` |
-| `pl ls` |  | List all public links |  |
-| `pl rm` |  | Revoke a public link | ` [-f]` |
-| `pl set` |  | Update public link settings | ` [-e] [--max-downloads] [-P] [--remove-expiration] [--remove-max-downloads] [--remove-password]` |
-| `sr` | `share` | Manage shared files and folders |  |
-| `sr accept` |  | Accept a pending share |  |
-| `sr add` |  | Share a folder with a user | ` [-f] [-p]` |
-| `sr decline` |  | Decline a received share |  |
-| `sr inbox` |  | List shares you've received from others |  |
-| `sr ls` |  | List share recipients for a folder |  |
-| `sr rm` |  | Remove a specific share recipient | ` [-f]` |
-| `sr set` |  | Update share settings (permission, password, expiry) | ` [-e] [-P] [-p] [--remove-expiration] [--remove-password] [-u]` |
-
-### Info & Tools
-
-| Command | Alias | Description | Flags |
-|---------|-------|-------------|-------|
-| `ac` | `activity` | View activity log and notifications | ` [-n] [-m] [-o] [-u]` |
-| `cf` | `config` | Manage CLI configuration |  |
-| `cf get` |  | Get a configuration value |  |
-| `cf ls` | `list` | Show all configuration values |  |
-| `cf set` |  | Set a configuration value |  |
-| `cm` | `completion` | Generate shell completion scripts |  |
-| `du` | `usage` | Show storage breakdown by file type |  |
-| `hl` | `help` | Show help for commands | ` [-v]` |
-| `in` | `info` | Show file or directory info |  |
-| `op` | `open` | Open a file or folder in the browser |  |
-| `rc` | `recents` | List recently accessed files | ` [-l]` |
-| `sh` | `shell` | Start an interactive shell |  |
-| `ss` | `sessions` | Manage active sessions and devices |  |
-| `ss devices` |  | List trusted devices |  |
-| `ss forget` |  | Remove a trusted device |  |
-| `ss ls` |  | List active sessions and devices |  |
-| `ss revoke` |  | Revoke an active session |  |
-| `ss revoke-all` |  | Revoke all other sessions |  |
-| `st` | `stats` | Show storage statistics |  |
-| `vr` | `version` | Show version information |  |
-| `xp` | `export` | Export all personal data | ` [-o]` |
+Run `pc hl <command>` for detailed help on any command (flags, examples, related commands).
 
 ## Command Details
 
@@ -977,15 +985,6 @@ pc cf list                        # Show all values
 pc cf get cwd                     # Get a single value
 pc cf set cwd /Documents          # Set a value
 ```
-
-## Global Flags
-
-| Flag | Description |
-|------|-------------|
-| `--json` | Output in JSON format for scripting |
-| `-q, --quiet` | Suppress non-essential output |
-| `--no-color` | Disable colored output |
-| `--config` | Use a custom config file path |
 
 ## Troubleshooting
 

@@ -24,7 +24,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.10.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-2.0.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +33,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-1.10.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-2.0.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -73,8 +73,8 @@ echo "Hello world" | pc ul - /hello.txt
 # Download a file
 pc dl /Documents/document.pdf ./
 
-# Search inside encrypted files
-pc gr -r "TODO" /Documents
+# Search file contents (fast — sealed index by default)
+pc gr "TODO"
 
 # Diff between file versions
 pc df /report.md 3 5
@@ -147,6 +147,7 @@ COMMANDS
 ├── Navigation
 │   ├── cd               Change working directory
 │   ├── fd, find         Find files by name [-a] [-F] [-i] [-n] [-E] [-t]
+│   ├── gr, grep         Search file contents [-A] [-l] [-F] [-i] [-m] [-r] [-E]
 │   ├── ls, list         List files and directories [-a] [-n] [-l] [-o] [-r] [-S] [-t]
 │   ├── tr, tree         Display directory tree [-a] [-d] [-D]
 │   └── wd, pwd          Print working directory
@@ -161,7 +162,6 @@ COMMANDS
 │   │   ├── ls           List all favorites
 │   │   └── rm           Remove a path from favorites
 │   │
-│   ├── gr, grep         Search inside encrypted files [-l] [-F] [-i] [-m] [-r] [-E]
 │   ├── hd, hide         Hide or unhide files and folders
 │   │   ├── add          Hide a file or folder
 │   │   ├── ls           List all hidden items
@@ -185,7 +185,7 @@ COMMANDS
 │   │   └── ls           List recycling bin contents
 │   │
 │   ├── tc, touch        Create a new text file [-c]
-│   ├── ul, upload       Upload a file or directory to cloud storage [-f] [-j] [--skip-existing]
+│   ├── ul, upload       Upload a file or directory to cloud storage [-f] [-j] [--preserve-timestamps] [--skip-existing]
 │   └── vh, versions     View and manage file version history
 │       ├── dl           Download a specific version
 │       ├── prune        Delete all but the last N versions [-k]
@@ -246,6 +246,7 @@ COMMANDS
     │
     ├── st, stats        Show storage statistics
     ├── vr, version      Show version information
+    ├── wc, welcome      Quickstart tour for the PigCloud CLI
     └── xp, export       Export all personal data [-o]
 
 GLOBAL FLAGS
@@ -281,7 +282,7 @@ pc li                             # Authenticate with your API key
 Stop the background key agent and clear decrypted keys from memory.
 
 After locking, commands that access encrypted files will prompt for your
-encryption password again (or require 'pc uk' to unlock).
+password again (or require 'pc uk' to unlock).
 
 
 ```bash
@@ -343,6 +344,32 @@ pc fd "report*" /docs              # Glob: search in /docs
 pc fd -t d "project"               # Glob: directories only
 pc fd -E "report_\d{4}" /docs      # Regex: report_2024 etc.
 pc fd -Fi "readme" /               # Fixed: case-insensitive substring
+```
+
+
+### `gr` (grep) — Search file contents
+
+Search for a pattern across your files.
+
+Default mode walks the sealed full-text index — no file content is
+downloaded, only the per-file sealed token index (built on upload +
+backfill). Multiple tokens (space-separated) are AND'd, case-insensitive,
+two-character minimum. Files that aren't indexed yet are silently skipped;
+the web client backfills older uploads automatically.
+
+Passing a [path] argument, -A/--all-files, -E (regex), or -F (fixed
+substring) switches to the per-file download + line-scan path. Slower
+but scopes to the given path, covers unindexed files, and supports regex
+or substring matches that cross token boundaries.
+
+
+```bash
+pc gr "TODO"                       # fast index search across all files
+pc gr "function authenticate"      # AND tokens
+pc gr -l "TODO"                    # show only file names
+pc gr "fmt.Println" /src           # scoped scan (path arg triggers full scan)
+pc gr -E "func\s+\w+" /src         # regex (triggers full scan)
+pc gr -F "API_KEY" /configs        # literal substring (triggers full scan)
 ```
 
 
@@ -437,29 +464,6 @@ pc fv                  # List favorites
 pc fv /Documents         # Toggle favorite
 pc fv add /Documents     # Add to favorites
 pc fv rm /Documents      # Remove from favorites
-```
-
-
-### `gr` (grep) — Search inside encrypted files
-
-Search for a pattern inside encrypted file contents.
-
-Downloads each text file, decrypts client-side, and searches for matches.
-Only text files are searched (binary files are skipped).
-
-By default the pattern is a regular expression. Use -F for literal
-substring matching or -E to be explicit about regex mode.
-
-This is slower than local grep because each file must be downloaded and
-decrypted. Use a specific path to narrow the search scope.
-
-
-```bash
-pc gr "TODO" /Documents       # Regex: search in /Documents
-pc gr -r "func\s+\w+" /src    # Regex: recursive function search
-pc gr -F "fmt.Println" /src   # Fixed: literal substring match
-pc gr -l "API_KEY" /configs   # Show matching file names only
-pc gr -i "error" /logs        # Case-insensitive search
 ```
 
 
@@ -939,6 +943,17 @@ Display storage usage statistics for your account.
 ### `vr` (version) — Show version information
 
 Display the version, commit hash, and build date of the CLI.
+
+
+### `wc` (welcome) — Quickstart tour for the PigCloud CLI
+
+Print a quickstart tour covering identity, common commands, and power
+features. Re-run anytime to refresh your memory.
+
+
+```bash
+pc wc                             # Friendly walkthrough of the CLI
+```
 
 
 ### `xp` (export) — Export all personal data

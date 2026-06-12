@@ -10,7 +10,7 @@ Two-letter aliases, an interactive shell with tab-completion, and `--json`
 output make common workflows fast and scriptable.
 
 The CLI also serves as a unique **decryption endpoint** — commands like `gr`
-(grep) and `df` (diff) can search and compare encrypted file contents
+(grep) and `di` (diff) can search and compare encrypted file contents
 client-side, something the server and web UI cannot do.
 
 ## Installation
@@ -24,7 +24,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-2.1.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.0.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +33,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-2.1.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.0.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -77,7 +77,7 @@ pc dl /Documents/document.pdf ./
 pc gr "TODO"
 
 # Diff between file versions
-pc df /report.md 3 5
+pc di /report.md 3 5
 
 # Start an interactive shell session
 pc shell
@@ -146,26 +146,26 @@ COMMANDS
 
 ├── Navigation
 │   ├── cd               Change working directory
-│   ├── fd, find         Find files by name [-a] [-F] [-i] [-n] [-E] [-t]
+│   ├── fd, find         Find files by name [-a] [-F] [-i] [--larger-than] [-n] [--newer-than] [--older-than] [-E] [--smaller-than] [-t]
 │   ├── gr, grep         Search file contents [-A] [-l] [-F] [-i] [-m] [-r] [-E]
-│   ├── ls, list         List files and directories [-a] [-n] [-l] [-o] [-r] [-S] [-t]
-│   ├── tr, tree         Display directory tree [-a] [-d] [-D]
+│   ├── ls, list         List files and directories [-a] [--larger-than] [-n] [-l] [--newer-than] [-o] [--older-than] [-R] [--smaller-than] [-S] [-t]
+│   ├── tr, tree         Display directory tree [-a] [-L] [-d]
 │   └── wd, pwd          Print working directory
 
 ├── File Operations
 │   ├── cp, copy         Copy a file or directory [-d]
-│   ├── ct, cat          Display file content [--head] [-n] [-t]
-│   ├── df, diff         Diff a file between versions
+│   ├── ct, cat          Display file content [-n] [-t]
+│   ├── di, diff         Diff a file between versions [-l]
 │   ├── dl, download     Download a file or folder from cloud storage [-x] [--overwrite] [--skip-existing] [-z]
 │   ├── fv, favorite     Manage favorites
-│   │   ├── add          Add a path to favorites
+│   │   ├── add          Add paths to favorites
 │   │   ├── ls           List all favorites
-│   │   └── rm           Remove a path from favorites
+│   │   └── rm           Remove paths from favorites
 │   │
 │   ├── hd, hide         Hide or unhide files and folders
-│   │   ├── add          Hide a file or folder
+│   │   ├── add          Hide files or folders
 │   │   ├── ls           List all hidden items
-│   │   └── rm           Unhide a file or folder
+│   │   └── rm           Unhide files or folders
 │   │
 │   ├── mk, mkdir        Create a new directory [-p]
 │   ├── mn, mount        Mount cloud storage as a local drive
@@ -178,7 +178,7 @@ COMMANDS
 │   │   └── stop         Stop the mount daemon and unmount
 │   │
 │   ├── mv, move         Move or rename a file/directory [-d]
-│   ├── rm, remove       Delete a file or directory [-d] [-f] [-p]
+│   ├── rm, remove       Delete files or directories [-d] [-f] [-p]
 │   ├── rs, restore      Restore an item from the recycling bin
 │   ├── tb, trash        Manage recycling bin [-S] [-t]
 │   │   ├── empty        Permanently delete all items in the recycling bin [-f]
@@ -224,7 +224,11 @@ COMMANDS
 │       └── set          Update share settings (permission, password, expiry) [-e] [-P] [-p] [--remove-expiration] [--remove-password] [-u]
 
 └── Info & Tools
-    ├── ac, activity     View activity log and notifications [-n] [-m] [-o] [-u]
+    ├── ac, activity     View activity log and notifications [-n] [-m] [-o] [--since] [-t] [-u] [--until]
+    ├── ak, apikeys      View or revoke your API key
+    │   ├── ls           Show API key status
+    │   └── revoke       Revoke the API key (logs this CLI out) [-f]
+    │
     ├── cf, config       Manage CLI configuration
     │   ├── get          Get a configuration value
     │   ├── ls           Show all configuration values
@@ -232,10 +236,11 @@ COMMANDS
     │
     ├── cm, completion   Generate shell completion scripts
     ├── du, usage        Show storage breakdown by file type
+    ├── hi, welcome      Quickstart tour for the PigCloud CLI
     ├── hl, help         Show help for commands [-v]
     ├── in, info         Show file or directory info
     ├── op, open         Open a file or folder in the browser
-    ├── rc, recents      List recently accessed files [-l]
+    ├── rc, recents      List recently accessed files [-n]
     ├── sh, shell        Start an interactive shell
     ├── ss, sessions     Manage active sessions and devices
     │   ├── devices      List trusted devices
@@ -246,7 +251,6 @@ COMMANDS
     │
     ├── st, stats        Show storage statistics
     ├── vr, version      Show version information
-    ├── wc, welcome      Quickstart tour for the PigCloud CLI
     └── xp, export       Export all personal data [-o]
 
 GLOBAL FLAGS
@@ -344,6 +348,8 @@ pc fd "report*" /docs              # Glob: search in /docs
 pc fd -t d "project"               # Glob: directories only
 pc fd -E "report_\d{4}" /docs      # Regex: report_2024 etc.
 pc fd -Fi "readme" /               # Fixed: case-insensitive substring
+pc fd "*" --larger-than 100M       # Files over 100 MB
+pc fd "*.jpg" --newer-than 2026-01-01   # Recent photos
 ```
 
 
@@ -382,7 +388,7 @@ Use 'pc cd' to change the working directory.
 
 Flags:
   -l    Show detailed information (size in bytes, full timestamps)
-  -r    List directories recursively
+  -R    List directories recursively
   -S    Sort by file size (largest first)
   -t    Sort by modification time (newest first)
 
@@ -411,23 +417,24 @@ Display the content of a text file from your cloud storage.
 Only text files up to 1MB can be displayed. Binary files are not supported.
 
 Flags:
-  -n, --lines N   Show only the first N lines
-  --head N        Show only the first N lines (same as -n)
-  --tail N        Show only the last N lines
+  -n, --head N    Show only the first N lines
+  -t, --tail N    Show only the last N lines
 
 
-### `df` (diff) — Diff a file between versions
+### `di` (diff) — Diff a file between versions
 
-Show differences between two versions of a file, or between a version
-and the current file.
+Show differences between two versions of a file, between a version
+and the current file, or between the cloud file and a local copy (--local).
 
-Only works with text files. Downloads and decrypts both versions locally,
+Only works with text files. Downloads and decrypts the cloud side locally,
 then displays a unified diff.
 
 
 ```bash
-pc df /report.md 3 5     # Diff version 3 vs version 5
-pc df /report.md 3       # Diff version 3 vs current
+pc di /report.md 3 5               # Diff version 3 vs version 5
+pc di /report.md 3                 # Diff version 3 vs current
+pc di /report.md -l ./report.md    # Diff cloud file vs local copy
+pc di /report.md 3 -l ./report.md  # Diff version 3 vs local copy
 ```
 
 
@@ -436,6 +443,7 @@ pc df /report.md 3       # Diff version 3 vs current
 Download a file or folder from your cloud storage.
 
 If local-path is not specified, downloads to the current directory.
+Use - as local-path to stream the decrypted file to stdout for piping.
 
 Use --extract (-x) to download a folder's contents as individual files,
 preserving the directory structure locally instead of creating a ZIP.
@@ -448,6 +456,7 @@ Files are decrypted before being added to the archive.
 pc dl /Documents/report.pdf ./       # Download a file
 pc dl /Documents ./docs -x              # Download folder contents individually
 pc dl /Documents ./backup.zip --zip     # Download folder as ZIP archive
+pc dl /backup.sql.gz - | gunzip         # Stream decrypted file to stdout
 ```
 
 
@@ -462,7 +471,7 @@ With a path argument, toggles the favorite status.
 ```bash
 pc fv                  # List favorites
 pc fv /Documents         # Toggle favorite
-pc fv add /Documents     # Add to favorites
+pc fv add "*.jpg"        # Add all matches to favorites
 pc fv rm /Documents      # Remove from favorites
 ```
 
@@ -478,7 +487,7 @@ With a path argument, toggles the hidden status.
 ```bash
 pc hd                  # List hidden items
 pc hd /Private           # Toggle hidden
-pc hd add /Private       # Hide
+pc hd add "*.bak"        # Hide all matches
 pc hd rm /Private        # Unhide
 ```
 
@@ -534,18 +543,30 @@ pc mn mv -d /mnt/data/pigcloud -f
 
 ### `mv` (move) — Move or rename a file/directory
 
-Move a file or directory to a new location, or rename it.
+Move files or directories to a new location, or rename one.
 
-If target is a directory, the source will be moved into it.
-If target doesn't exist, source will be renamed to target.
+If target is a directory, sources are moved into it.
+If target doesn't exist, a single source is renamed to target.
+
+Accepts multiple sources and glob patterns; the last argument is the target,
+which must be an existing directory when moving more than one source.
 
 Flags:
-  -d, --dry   Show what would be moved without actually moving
+  -d, --dry-run   Show what would be moved without actually moving
 
 
-### `rm` (remove) — Delete a file or directory
+```bash
+pc mv /draft.txt /final.txt        # Rename
+pc mv a.txt b.txt /Archive/         # Move several into a directory
+pc mv "*.log" /logs/                # Move by glob
+```
 
-Delete a file or directory from your cloud storage.
+
+### `rm` (remove) — Delete files or directories
+
+Delete files or directories from your cloud storage.
+
+Accepts multiple paths and glob patterns (* ? [], last path segment only).
 
 By default, items are moved to the recycling bin and can be restored later.
 Items in the recycling bin are automatically deleted after 30 days.
@@ -554,8 +575,16 @@ Use --permanent to bypass the recycling bin and delete immediately.
 
 Flags:
   -p, --permanent   Permanently delete, bypassing the recycling bin
-  -d, --dry         Show what would be deleted without actually deleting
+  -d, --dry-run     Show what would be deleted without actually deleting
   -f, --force       Skip confirmation prompt
+
+
+```bash
+pc rm /old-report.pdf              # Trash one file
+pc rm a.txt b.txt c.txt            # Trash several
+pc rm "*.tmp"                      # Trash everything matching a glob
+pc rm "/logs/*.log" -p -f          # Permanently delete, no prompt
+```
 
 
 ### `rs` (restore) — Restore an item from the recycling bin
@@ -784,8 +813,28 @@ View your recent activity and notifications.
 pc ac                             # Show recent activity
 pc ac -u                          # Show only unread notifications
 pc ac -n 5                        # Show last 5 events
+pc ac -t login,share_sent         # Filter by event type(s)
+pc ac --since 2026-05-01          # Only events on or after a date
 pc ac -m all                      # Mark all as read
 pc ac -m 42                       # Mark a specific event as read
+```
+
+
+### `ak` (apikeys) — View or revoke your API key
+
+Show the status of your PigCloud API key, or revoke it.
+
+PigCloud issues a single API key per account — the same key this CLI uses to
+authenticate. 'pc ak' shows its identifier, creation time, and last use.
+
+'pc ak revoke' invalidates the key server-side so it stops working everywhere,
+then clears it from this machine. Create a new key in account settings on the
+web, then run 'pc li' to log back in.
+
+
+```bash
+pc ak                 # Show API key status
+pc ak revoke          # Revoke the API key (logs this CLI out)
 ```
 
 
@@ -866,6 +915,17 @@ pc du    # Show storage breakdown
 ```
 
 
+### `hi` (welcome) — Quickstart tour for the PigCloud CLI
+
+Print a quickstart tour covering identity, common commands, and power
+features. Re-run anytime to refresh your memory.
+
+
+```bash
+pc hi                             # Friendly walkthrough of the CLI
+```
+
+
 ### `hl` (help) — Show help for commands
 
 Display help information about PigCloud CLI commands.
@@ -899,7 +959,7 @@ Show files and folders you've recently opened or accessed.
 
 ```bash
 pc rc              # List recent items
-pc rc -l 10        # Show last 10 recent items
+pc rc -n 10        # Show last 10 recent items
 ```
 
 
@@ -943,17 +1003,6 @@ Display storage usage statistics for your account.
 ### `vr` (version) — Show version information
 
 Display the version, commit hash, and build date of the CLI.
-
-
-### `wc` (welcome) — Quickstart tour for the PigCloud CLI
-
-Print a quickstart tour covering identity, common commands, and power
-features. Re-run anytime to refresh your memory.
-
-
-```bash
-pc wc                             # Friendly walkthrough of the CLI
-```
 
 
 ### `xp` (export) — Export all personal data

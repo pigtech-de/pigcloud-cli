@@ -24,7 +24,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.0.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.1.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +33,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.0.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.1.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -170,9 +170,11 @@ COMMANDS
 │   ├── mk, mkdir        Create a new directory [-p]
 │   ├── mn, mount        Mount cloud storage as a local drive
 │   │   ├── clean        Remove rejected (unsyncable) files from mount
+│   │   ├── conflicts    List files changed both locally and remotely
 │   │   ├── files        Show per-file sync status [--issues] [--tree]
 │   │   ├── mv           Move the sync folder to a different location [-d] [-f]
 │   │   ├── pin          Pin a file or folder for offline access [--list] [--remove]
+│   │   ├── resolve      Settle a sync conflict [-f] [-k]
 │   │   ├── start        Start the mount daemon [--cache-size] [--poll-interval] [--read-only] [--virtual]
 │   │   ├── status       Show mount status and cache statistics
 │   │   └── stop         Stop the mount daemon and unmount
@@ -193,7 +195,7 @@ COMMANDS
 │       └── rs           Restore a file to a specific version
 
 ├── Sharing
-│   ├── ch, chat         Send and receive E2EE chat messages [--before] [-n]
+│   ├── ch, chat         Send and receive E2EE chat messages [--before-id] [-n]
 │   │   ├── ls           List conversations
 │   │   ├── read         Mark conversation as read
 │   │   ├── rm           Delete a sent message
@@ -209,7 +211,7 @@ COMMANDS
 │   │   └── rm           Remove a friend
 │   │
 │   ├── pl, link         Create and manage public links
-│   │   ├── add          Create a public link [-e] [--max-downloads] [-P]
+│   │   ├── add          Create a public link [-e] [--max-downloads] [-P] [--qr]
 │   │   ├── ls           List all public links
 │   │   ├── rm           Revoke a public link [-f]
 │   │   └── set          Update public link settings [-e] [--max-downloads] [-P] [--remove-expiration] [--remove-max-downloads] [--remove-password]
@@ -224,7 +226,7 @@ COMMANDS
 │       └── set          Update share settings (permission, password, expiry) [-e] [-P] [-p] [--remove-expiration] [--remove-password] [-u]
 
 └── Info & Tools
-    ├── ac, activity     View activity log and notifications [-n] [-m] [-o] [--since] [-t] [-u] [--until]
+    ├── ac, activity     View activity log and notifications [-f] [-n] [-m] [-o] [--since] [-t] [-u] [--until]
     ├── ak, apikeys      View or revoke your API key
     │   ├── ls           Show API key status
     │   └── revoke       Revoke the API key (logs this CLI out) [-f]
@@ -235,6 +237,7 @@ COMMANDS
     │   └── set          Set a configuration value
     │
     ├── cm, completion   Generate shell completion scripts
+    ├── dr, doctor       Diagnose the CLI setup
     ├── du, usage        Show storage breakdown by file type
     ├── hi, welcome      Quickstart tour for the PigCloud CLI
     ├── hl, help         Show help for commands [-v]
@@ -250,6 +253,7 @@ COMMANDS
     │   └── revoke-all   Revoke all other sessions
     │
     ├── st, stats        Show storage statistics
+    ├── vf, verify       Verify file signatures [-n]
     ├── vr, version      Show version information
     └── xp, export       Export all personal data [-o]
 
@@ -524,6 +528,8 @@ pc mn start                  # Sync root at default location
 pc mn stop                   # Unmount and stop sync
 pc mn files --tree           # Show synced files as a tree
 pc mn files --issues         # Show files with sync problems
+pc mn conflicts              # List files changed on both sides
+pc mn resolve <path> -k both # Settle a conflict, keeping both copies
 ```
 
 
@@ -538,6 +544,21 @@ Use -f to skip the confirmation prompt.
 ```bash
 pc mn mv -d D:\PigCloud
 pc mn mv -d /mnt/data/pigcloud -f
+```
+
+
+#### `mn resolve` — Settle a sync conflict
+
+Settle a conflict for a file that changed both locally and remotely.
+
+--keep local   upload your local edit (the remote copy stays in version history)
+--keep remote  discard your local edit and re-download the remote file
+--keep both    keep the local edit as a "(conflict <date>)" copy and re-download
+
+
+```bash
+pc mn resolve Docs/notes.txt -k both
+pc mn resolve Docs/notes.txt -k remote -f
 ```
 
 
@@ -620,7 +641,11 @@ pc tb empty              # Empty the bin
 
 Create a new text file in your cloud storage.
 
+The first argument is either a full path (/Documents/notes.txt) or a bare
+name combined with an optional directory argument.
+
 Content can be provided via --content flag or piped from stdin.
+With neither, an empty file is created.
 The file is encrypted client-side before upload (E2EE).
 
 If no extension is given, .txt is appended automatically.
@@ -628,6 +653,7 @@ Only text file types are allowed.
 
 
 ```bash
+pc tc /Documents/notes.txt -c "Hello world"
 pc tc notes.txt /Documents --content "Hello world"
 echo "piped content" | pc tc log.txt /Logs
 pc tc readme.md --content "# Title"
@@ -742,6 +768,7 @@ Use subcommands to create, update, or revoke links.
 pc pl /report.pdf                         # Show link details
 pc pl add /report.pdf                     # Create public link
 pc pl add /report.pdf -P secret123        # Create with password
+pc pl add /report.pdf --qr                # Print a scannable QR code
 pc pl set /report.pdf --max-downloads 50  # Set download limit
 pc pl rm /report.pdf                      # Revoke link
 ```
@@ -815,6 +842,7 @@ pc ac -u                          # Show only unread notifications
 pc ac -n 5                        # Show last 5 events
 pc ac -t login,share_sent         # Filter by event type(s)
 pc ac --since 2026-05-01          # Only events on or after a date
+pc ac -f                          # Follow: print new events as they happen
 pc ac -m all                      # Mark all as read
 pc ac -m 42                       # Mark a specific event as read
 ```
@@ -854,20 +882,21 @@ Valid configuration keys:
   default_json  - Always output JSON (true/false)
   default_quiet - Suppress non-essential output (true/false)
   no_color      - Disable colored output (true/false)
+  language      - Server message language: en or de (default en)
 
 
 #### `cf get` — Get a configuration value
 
 Get a specific configuration value.
 
-Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color
+Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color, language
 
 
 #### `cf set` — Set a configuration value
 
 Set a configuration value.
 
-Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color
+Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color, language
 
 
 ```bash
@@ -901,6 +930,19 @@ PowerShell:
   PS> pigcloud completion powershell | Out-String | Invoke-Expression
   # To load completions for each session, add to your profile:
   PS> pigcloud completion powershell >> $PROFILE
+
+
+### `dr` (doctor) — Diagnose the CLI setup
+
+Check the local CLI setup: credentials, endpoint reachability, encryption
+keys, the key agent, mount backends, and the mount daemon. Exits non-zero
+when a check fails.
+
+
+```bash
+pc dr
+pc dr --json
+```
 
 
 ### `du` (usage) — Show storage breakdown by file type
@@ -998,6 +1040,24 @@ pc ss forget <device-id>       # Remove a trusted device
 ### `st` (stats) — Show storage statistics
 
 Display storage usage statistics for your account.
+
+
+### `vf` (verify) — Verify file signatures
+
+Download every file under a path and run the strict-AND signature check
+(owner-key pin, or TEE signatures for sanitized files). Bytes are verified
+in memory and discarded; nothing is written to disk.
+
+Reports tampered or unverifiable files and exits non-zero if any fail.
+Files uploaded before the signing rollout are reported as unsigned, not
+failed.
+
+
+```bash
+pc vf                # Verify everything
+pc vf /Documents     # Verify one folder
+pc vf -n 100         # Stop after 100 files
+```
 
 
 ### `vr` (version) — Show version information

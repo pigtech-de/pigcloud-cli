@@ -15,6 +15,22 @@ client-side, something the server and web UI cannot do.
 
 ## Installation
 
+### Quick install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://pigtech.de/cli/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://pigtech.de/cli/install.ps1 | iex
+```
+
+The script downloads the right build for your platform, verifies its SHA-256, and installs `pc` and `pigcloud`.
+
 ### Download Binary
 
 Download the appropriate binary for your platform from the [releases page](https://github.com/pigtech-de/pigcloud-cli/releases).
@@ -24,7 +40,7 @@ Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand a
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.1.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.2.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -33,7 +49,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.1.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.2.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -138,10 +154,10 @@ The same tree is shown by `pc hl` at runtime.
 COMMANDS
 
 ├── Authentication
-│   ├── li, login        Authenticate with your API key
+│   ├── li, login        Sign in from your browser [--api-key]
 │   ├── lk, lock         Lock encryption keys
 │   ├── lo, logout       Remove stored credentials
-│   ├── uk, unlock       Unlock encryption keys for this session [-t]
+│   ├── uk, unlock       Unlock encryption keys for this session [--stdin] [-t]
 │   └── wh, whoami       Show current user info
 
 ├── Navigation
@@ -177,7 +193,7 @@ COMMANDS
 │   │   ├── resolve      Settle a sync conflict [-f] [-k]
 │   │   ├── start        Start the mount daemon [--cache-size] [--poll-interval] [--read-only] [--virtual]
 │   │   ├── status       Show mount status and cache statistics
-│   │   └── stop         Stop the mount daemon and unmount
+│   │   └── stop         Stop a mount daemon and unmount [-a]
 │   │
 │   ├── mv, move         Move or rename a file/directory [-d]
 │   ├── rm, remove       Delete files or directories [-d] [-f] [-p]
@@ -270,18 +286,21 @@ Run `pc hl <command>` for detailed help on any command (flags, examples, related
 ## Command Details
 
 
-### `li` (login) — Authenticate with your API key
+### `li` (login) — Sign in from your browser
 
-Authenticate with your PigCloud API key.
+Sign in to PigCloud.
 
-You can find your API key in the PigCloud web interface under Settings > API Keys.
-The API key will be stored securely in your local configuration file.
+By default 'pc login' opens your browser and asks you to approve this device,
+so there is no API key to copy. Approve it while signed in to the web app and
+the CLI finishes on its own.
 
-You will be prompted to enter your API key securely (input is hidden).
+For CI or headless machines, pass an API key instead:
+  pc login --api-key <key>        # or pipe it:  echo "<key>" | pc login
+Generate the key in the web app under Settings > API access.
 
 
 ```bash
-pc li                             # Authenticate with your API key
+pc login                          # Approve this device in your browser
 ```
 
 
@@ -535,8 +554,8 @@ pc mn resolve <path> -k both # Settle a conflict, keeping both copies
 
 #### `mn mv` — Move the sync folder to a different location
 
-Move the local sync folder to a new directory. The mount daemon will be
-stopped during the move and restarted afterward.
+Move the local sync folder to a new directory. A running mount daemon is
+stopped during the move; restart it afterward with 'pc mn start <remote-path>'.
 
 Use -f to skip the confirmation prompt.
 
@@ -559,6 +578,26 @@ Settle a conflict for a file that changed both locally and remotely.
 ```bash
 pc mn resolve Docs/notes.txt -k both
 pc mn resolve Docs/notes.txt -k remote -f
+```
+
+
+#### `mn status` — Show mount status and cache statistics
+
+
+```bash
+pc mn status
+pc mn status /Photos  # Detail for one of several mounts
+pc mn status --json   # machine-readable: {"running", "mounts": [...]}
+```
+
+
+#### `mn stop` — Stop a mount daemon and unmount
+
+
+```bash
+pc mn stop            # Stop the only mount
+pc mn stop /Photos    # Stop one of several mounts
+pc mn stop -a         # Stop every running mount
 ```
 
 

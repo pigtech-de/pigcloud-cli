@@ -1159,7 +1159,15 @@ pc cf set cwd /Documents          # Set a value
 | `File not found` on a path you can see in the web UI | Your CLI working directory may differ. Run `pc wd` to check and `pc cd /` to reset. |
 | Destructive command prompts | Most destructive commands (`rm`, `vh rm`, `pl rm`, `tb empty`) prompt for confirmation. Use `-f` to skip, or `-d` (dry run) to preview. |
 
-## License
+## Source, issues, and license
 
-Copyright (c) PigTech. All rights reserved.
-See [LICENSE](LICENSE) for details.
+This repository is a source mirror of the CLI as shipped in each release,
+published for review and reproducible builds. It does not accept pull requests;
+bug reports and feature requests go to
+[pigcloud-issues](https://github.com/pigtech-de/pigcloud-issues/issues).
+
+The source is available under the
+[PolyForm Internal Use License 1.0.0](LICENSE): you may read, audit, and build
+it for your own internal or personal use. Any other use, including
+redistribution, needs written permission from PigTech. Official binaries are
+provided under the [PigCloud Terms of Service](https://pigtech.de/terms/).

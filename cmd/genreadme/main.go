@@ -266,16 +266,16 @@ const readmeTmpl = `# PigCloud CLI
 
 A command-line interface for managing your PigCloud storage.
 
-PigCloud provides **end-to-end encryption** — files are encrypted on your device
+PigCloud is **end-to-end encrypted**: files are encrypted on your device
 before upload and decrypted locally after download. The server never sees
 plaintext content, file names, or data keys. A familiar, Unix-style CLI lets you
 upload, download, share, and organise files straight from your terminal.
 Two-letter aliases, an interactive shell with tab-completion, and ` + "`--json`" + `
 output make common workflows fast and scriptable.
 
-The CLI also serves as a unique **decryption endpoint** — commands like ` + "`gr`" + `
-(grep) and ` + "`di`" + ` (diff) can search and compare encrypted file contents
-client-side, something the server and web UI cannot do.
+Because decryption happens client-side, commands like ` + "`gr`" + ` (grep) and
+` + "`di`" + ` (diff) can search and compare encrypted file contents, something
+the server and web UI cannot do.
 
 ## Installation
 
@@ -284,13 +284,13 @@ client-side, something the server and web UI cannot do.
 Linux and macOS:
 
 ` + "```bash" + `
-curl -fsSL https://pigtech.de/cli/install.sh | sh
+curl -fsSL https://pigcloud.de/cli/install.sh | sh
 ` + "```" + `
 
 Windows (PowerShell):
 
 ` + "```powershell" + `
-irm https://pigtech.de/cli/install.ps1 | iex
+irm https://pigcloud.de/cli/install.ps1 | iex
 ` + "```" + `
 
 The script downloads the right build for your platform, verifies its SHA-256, and installs ` + "`pc`" + ` and ` + "`pigcloud`" + `.
@@ -337,7 +337,7 @@ make build
 ## Quick Start
 
 ` + "```bash" + `
-# Authenticate — paste your API key when prompted
+# Authenticate: paste your API key when prompted
 # (find it in the PigCloud web UI under Settings > API Keys)
 pc login
 
@@ -353,7 +353,7 @@ echo "Hello world" | pc ul - /hello.txt
 # Download a file
 pc dl /Documents/document.pdf ./
 
-# Search file contents (fast — sealed index by default)
+# Search file contents (sealed index by default)
 pc gr "TODO"
 
 # Diff between file versions
@@ -371,14 +371,14 @@ and sent as a header with every request over HTTPS. No OAuth flow or browser
 redirect needed.
 
 - Each account has one active API key. Generating a new key revokes the previous one.
-- The key secret is hashed with Argon2id on the server — it cannot be recovered, only regenerated.
+- The key secret is hashed with Argon2id on the server; it cannot be recovered, only regenerated.
 - On Linux/macOS the config file is written with mode ` + "`0600`" + ` (owner-only). On Windows,
   standard user-directory ACLs apply.
 - Treat your config file like an SSH private key: don't share it or commit it to version control.
 
 ## Security Model
 
-PigCloud uses **end-to-end encryption (E2EE)** — the CLI encrypts files locally
+PigCloud uses **end-to-end encryption (E2EE)**: the CLI encrypts files locally
 before upload and decrypts them locally after download. The server stores only
 ciphertext and never has access to plaintext content or data keys.
 
@@ -394,7 +394,7 @@ ciphertext and never has access to plaintext content or data keys.
 | File sharing | Re-seal per recipient | Data key is unsealed with sender's private key, then re-sealed with recipient's public key. |
 
 E2EE keys are set up on first login and cached locally. The private key remains
-encrypted at rest — it is only decrypted in memory when needed. Use ` + "`pc uk`" + ` to
+encrypted at rest and only decrypted in memory when needed. Use ` + "`pc uk`" + ` to
 unlock keys for a session and ` + "`pc lk`" + ` to lock them again.
 
 ## Paths
@@ -424,7 +424,7 @@ Run ` + "`pc hl <command>`" + ` for detailed help on any command (flags, example
 {{- range .Commands}}{{$parent := .Name}}
 {{- if or .Long .Examples}}
 
-### ` + "`" + `{{.Name}}` + "`" + `{{if .Aliases}} ({{.Aliases}}){{end}} — {{.Description}}
+### ` + "`" + `{{.Name}}` + "`" + `{{if .Aliases}} ({{.Aliases}}){{end}}: {{.Description}}
 {{if .Long}}
 {{.Long}}
 {{end}}
@@ -438,7 +438,7 @@ Run ` + "`pc hl <command>`" + ` for detailed help on any command (flags, example
 {{- range .Subcommands}}
 {{- if or .Long .Examples}}
 
-#### ` + "`" + `{{$parent}} {{.Name}}` + "`" + ` — {{.Description}}
+#### ` + "`" + `{{$parent}} {{.Name}}` + "`" + `: {{.Description}}
 {{if .Long}}
 {{.Long}}
 {{end}}
@@ -462,7 +462,7 @@ Configuration is stored in:
 ` + "```json" + `
 {
   "api_key": "pc_live_abc123...",
-  "endpoint": "https://pigtech.de/cloud/actions.php",
+  "endpoint": "https://pigcloud.de/cloud/actions.php",
   "cwd": "/Documents",
   "e2ee_public_key": "base64...",
   "e2ee_private_key": "base64...(encrypted)"
@@ -494,8 +494,16 @@ pc cf set cwd /Documents          # Set a value
 | ` + "`File not found`" + ` on a path you can see in the web UI | Your CLI working directory may differ. Run ` + "`pc wd`" + ` to check and ` + "`pc cd /`" + ` to reset. |
 | Destructive command prompts | Most destructive commands (` + "`rm`" + `, ` + "`vh rm`" + `, ` + "`pl rm`" + `, ` + "`tb empty`" + `) prompt for confirmation. Use ` + "`-f`" + ` to skip, or ` + "`-d`" + ` (dry run) to preview. |
 
-## License
+## Source, issues, and license
 
-Copyright (c) PigTech. All rights reserved.
-See [LICENSE](LICENSE) for details.
+This repository is a source mirror of the CLI as shipped in each release,
+published for review and reproducible builds. It does not accept pull requests;
+bug reports and feature requests go to
+[pigcloud-issues](https://github.com/pigtech-de/pigcloud-issues/issues).
+
+The source is available under the
+[PolyForm Internal Use License 1.0.0](LICENSE): you may read, audit, and build
+it for your own internal or personal use. Any other use, including
+redistribution, needs written permission from PigTech. Official binaries are
+provided under the [PigCloud Terms of Service](https://pigtech.de/terms/).
 `

@@ -41,7 +41,7 @@ var grCmd = &cobra.Command{
 	Short:   "Search file contents",
 	Long: `Search for a pattern across your files.
 
-Default mode walks the sealed full-text index — no file content is
+Default mode walks the sealed full-text index; no file content is
 downloaded, only the per-file sealed token index (built on upload +
 backfill). Multiple tokens (space-separated) are AND'd, case-insensitive,
 two-character minimum. Files that aren't indexed yet are silently skipped;

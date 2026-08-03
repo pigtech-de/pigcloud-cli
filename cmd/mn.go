@@ -49,7 +49,7 @@ Run 'pc mn' to check mount status. Use 'pc mn start' to mount.
 
 Sync mode (default): files are downloaded to a local folder and kept in sync
 bidirectionally. The folder is mapped as a drive letter (Windows) or symlink
-(Linux/macOS). Reads and writes are instant — no network latency.
+(Linux/macOS). Reads and writes are instant, with no network latency.
 
 Virtual mode (--virtual): FUSE/WinFsp network-backed mount where files are
 fetched on demand. Lower disk usage but higher latency.

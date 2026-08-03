@@ -2,16 +2,16 @@
 
 A command-line interface for managing your PigCloud storage.
 
-PigCloud provides **end-to-end encryption** — files are encrypted on your device
+PigCloud is **end-to-end encrypted**: files are encrypted on your device
 before upload and decrypted locally after download. The server never sees
 plaintext content, file names, or data keys. A familiar, Unix-style CLI lets you
 upload, download, share, and organise files straight from your terminal.
 Two-letter aliases, an interactive shell with tab-completion, and `--json`
 output make common workflows fast and scriptable.
 
-The CLI also serves as a unique **decryption endpoint** — commands like `gr`
-(grep) and `di` (diff) can search and compare encrypted file contents
-client-side, something the server and web UI cannot do.
+Because decryption happens client-side, commands like `gr` (grep) and
+`di` (diff) can search and compare encrypted file contents, something
+the server and web UI cannot do.
 
 ## Installation
 
@@ -20,13 +20,13 @@ client-side, something the server and web UI cannot do.
 Linux and macOS:
 
 ```bash
-curl -fsSL https://pigtech.de/cli/install.sh | sh
+curl -fsSL https://pigcloud.de/cli/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://pigtech.de/cli/install.ps1 | iex
+irm https://pigcloud.de/cli/install.ps1 | iex
 ```
 
 The script downloads the right build for your platform, verifies its SHA-256, and installs `pc` and `pigcloud`.
@@ -73,7 +73,7 @@ make build
 ## Quick Start
 
 ```bash
-# Authenticate — paste your API key when prompted
+# Authenticate: paste your API key when prompted
 # (find it in the PigCloud web UI under Settings > API Keys)
 pc login
 
@@ -89,7 +89,7 @@ echo "Hello world" | pc ul - /hello.txt
 # Download a file
 pc dl /Documents/document.pdf ./
 
-# Search file contents (fast — sealed index by default)
+# Search file contents (sealed index by default)
 pc gr "TODO"
 
 # Diff between file versions
@@ -107,14 +107,14 @@ and sent as a header with every request over HTTPS. No OAuth flow or browser
 redirect needed.
 
 - Each account has one active API key. Generating a new key revokes the previous one.
-- The key secret is hashed with Argon2id on the server — it cannot be recovered, only regenerated.
+- The key secret is hashed with Argon2id on the server; it cannot be recovered, only regenerated.
 - On Linux/macOS the config file is written with mode `0600` (owner-only). On Windows,
   standard user-directory ACLs apply.
 - Treat your config file like an SSH private key: don't share it or commit it to version control.
 
 ## Security Model
 
-PigCloud uses **end-to-end encryption (E2EE)** — the CLI encrypts files locally
+PigCloud uses **end-to-end encryption (E2EE)**: the CLI encrypts files locally
 before upload and decrypts them locally after download. The server stores only
 ciphertext and never has access to plaintext content or data keys.
 
@@ -130,7 +130,7 @@ ciphertext and never has access to plaintext content or data keys.
 | File sharing | Re-seal per recipient | Data key is unsealed with sender's private key, then re-sealed with recipient's public key. |
 
 E2EE keys are set up on first login and cached locally. The private key remains
-encrypted at rest — it is only decrypted in memory when needed. Use `pc uk` to
+encrypted at rest and only decrypted in memory when needed. Use `pc uk` to
 unlock keys for a session and `pc lk` to lock them again.
 
 ## Paths
@@ -286,7 +286,7 @@ Run `pc hl <command>` for detailed help on any command (flags, examples, related
 ## Command Details
 
 
-### `li` (login) — Sign in from your browser
+### `li` (login): Sign in from your browser
 
 Sign in to PigCloud.
 
@@ -304,7 +304,7 @@ pc login                          # Approve this device in your browser
 ```
 
 
-### `lk` (lock) — Lock encryption keys
+### `lk` (lock): Lock encryption keys
 
 Stop the background key agent and clear decrypted keys from memory.
 
@@ -317,14 +317,14 @@ pc lk    # Lock encryption keys
 ```
 
 
-### `lo` (logout) — Remove stored credentials
+### `lo` (logout): Remove stored credentials
 
 Remove stored API key and configuration from your system.
 
 This will delete your local configuration file and require you to login again.
 
 
-### `uk` (unlock) — Unlock encryption keys for this session
+### `uk` (unlock): Unlock encryption keys for this session
 
 Unlock your encryption keys so subsequent commands don't prompt for a password.
 
@@ -341,12 +341,12 @@ pc uk -t 30m         # Unlock for 30 minutes
 ```
 
 
-### `wh` (whoami) — Show current user info
+### `wh` (whoami): Show current user info
 
 Display information about the currently authenticated user.
 
 
-### `cd` — Change working directory
+### `cd`: Change working directory
 
 Change the current working directory in your cloud storage.
 
@@ -354,7 +354,7 @@ The working directory is persisted across CLI sessions.
 Use '..' to go up one directory, or '/' to go to root.
 
 
-### `fd` (find) — Find files by name
+### `fd` (find): Find files by name
 
 Search for files and directories matching a pattern.
 
@@ -376,11 +376,11 @@ pc fd "*.jpg" --newer-than 2026-01-01   # Recent photos
 ```
 
 
-### `gr` (grep) — Search file contents
+### `gr` (grep): Search file contents
 
 Search for a pattern across your files.
 
-Default mode walks the sealed full-text index — no file content is
+Default mode walks the sealed full-text index; no file content is
 downloaded, only the per-file sealed token index (built on upload +
 backfill). Multiple tokens (space-separated) are AND'd, case-insensitive,
 two-character minimum. Files that aren't indexed yet are silently skipped;
@@ -402,7 +402,7 @@ pc gr -F "API_KEY" /configs        # literal substring (triggers full scan)
 ```
 
 
-### `ls` (list) — List files and directories
+### `ls` (list): List files and directories
 
 List files and directories in your cloud storage.
 
@@ -421,19 +421,19 @@ pc ls -l -S                      # List with details, sorted by size
 ```
 
 
-### `tr` (tree) — Display directory tree
+### `tr` (tree): Display directory tree
 
 Display a tree view of directories and files.
 
 If no path is specified, shows the tree from the current working directory.
 
 
-### `wd` (pwd) — Print working directory
+### `wd` (pwd): Print working directory
 
 Display the current working directory in your cloud storage.
 
 
-### `ct` (cat) — Display file content
+### `ct` (cat): Display file content
 
 Display the content of a text file from your cloud storage.
 
@@ -444,7 +444,7 @@ Flags:
   -t, --tail N    Show only the last N lines
 
 
-### `di` (diff) — Diff a file between versions
+### `di` (diff): Diff a file between versions
 
 Show differences between two versions of a file, between a version
 and the current file, or between the cloud file and a local copy (--local).
@@ -461,7 +461,7 @@ pc di /report.md 3 -l ./report.md  # Diff version 3 vs local copy
 ```
 
 
-### `dl` (download) — Download a file or folder from cloud storage
+### `dl` (download): Download a file or folder from cloud storage
 
 Download a file or folder from your cloud storage.
 
@@ -483,7 +483,7 @@ pc dl /backup.sql.gz - | gunzip         # Stream decrypted file to stdout
 ```
 
 
-### `fv` (favorite) — Manage favorites
+### `fv` (favorite): Manage favorites
 
 Manage your favorites list.
 
@@ -499,7 +499,7 @@ pc fv rm /Documents      # Remove from favorites
 ```
 
 
-### `hd` (hide) — Hide or unhide files and folders
+### `hd` (hide): Hide or unhide files and folders
 
 Manage hidden files and folders.
 
@@ -515,7 +515,7 @@ pc hd rm /Private        # Unhide
 ```
 
 
-### `mk` (mkdir) — Create a new directory
+### `mk` (mkdir): Create a new directory
 
 Create a new directory in your cloud storage.
 
@@ -523,7 +523,7 @@ By default, the parent directory must already exist.
 Use -p to create parent directories as needed.
 
 
-### `mn` (mount) — Mount cloud storage as a local drive
+### `mn` (mount): Mount cloud storage as a local drive
 
 Mount your PigCloud storage as a local filesystem.
 
@@ -531,7 +531,7 @@ Run 'pc mn' to check mount status. Use 'pc mn start' to mount.
 
 Sync mode (default): files are downloaded to a local folder and kept in sync
 bidirectionally. The folder is mapped as a drive letter (Windows) or symlink
-(Linux/macOS). Reads and writes are instant — no network latency.
+(Linux/macOS). Reads and writes are instant, with no network latency.
 
 Virtual mode (--virtual): FUSE/WinFsp network-backed mount where files are
 fetched on demand. Lower disk usage but higher latency.
@@ -552,7 +552,7 @@ pc mn resolve <path> -k both # Settle a conflict, keeping both copies
 ```
 
 
-#### `mn mv` — Move the sync folder to a different location
+#### `mn mv`: Move the sync folder to a different location
 
 Move the local sync folder to a new directory. A running mount daemon is
 stopped during the move; restart it afterward with 'pc mn start <remote-path>'.
@@ -566,7 +566,7 @@ pc mn mv -d /mnt/data/pigcloud -f
 ```
 
 
-#### `mn resolve` — Settle a sync conflict
+#### `mn resolve`: Settle a sync conflict
 
 Settle a conflict for a file that changed both locally and remotely.
 
@@ -581,7 +581,7 @@ pc mn resolve Docs/notes.txt -k remote -f
 ```
 
 
-#### `mn status` — Show mount status and cache statistics
+#### `mn status`: Show mount status and cache statistics
 
 
 ```bash
@@ -591,7 +591,7 @@ pc mn status --json   # machine-readable: {"running", "mounts": [...]}
 ```
 
 
-#### `mn stop` — Stop a mount daemon and unmount
+#### `mn stop`: Stop a mount daemon and unmount
 
 
 ```bash
@@ -601,7 +601,7 @@ pc mn stop -a         # Stop every running mount
 ```
 
 
-### `mv` (move) — Move or rename a file/directory
+### `mv` (move): Move or rename a file/directory
 
 Move files or directories to a new location, or rename one.
 
@@ -622,7 +622,7 @@ pc mv "*.log" /logs/                # Move by glob
 ```
 
 
-### `rm` (remove) — Delete files or directories
+### `rm` (remove): Delete files or directories
 
 Delete files or directories from your cloud storage.
 
@@ -647,7 +647,7 @@ pc rm "/logs/*.log" -p -f          # Permanently delete, no prompt
 ```
 
 
-### `rs` (restore) — Restore an item from the recycling bin
+### `rs` (restore): Restore an item from the recycling bin
 
 Restore a file or directory from the recycling bin to its original location.
 
@@ -662,7 +662,7 @@ pc rs abc123def456...           # Restore by node ID from 'pc tb' output
 ```
 
 
-### `tb` (trash) — Manage recycling bin
+### `tb` (trash): Manage recycling bin
 
 Show all items in the recycling bin.
 
@@ -676,7 +676,7 @@ pc tb empty              # Empty the bin
 ```
 
 
-### `tc` (touch) — Create a new text file
+### `tc` (touch): Create a new text file
 
 Create a new text file in your cloud storage.
 
@@ -699,7 +699,7 @@ pc tc readme.md --content "# Title"
 ```
 
 
-### `ul` (upload) — Upload a file or directory to cloud storage
+### `ul` (upload): Upload a file or directory to cloud storage
 
 Upload a local file or directory to your cloud storage.
 
@@ -718,7 +718,7 @@ echo "hello" | pc ul - /hello.txt  # Upload from stdin
 ```
 
 
-### `vh` (versions) — View and manage file version history
+### `vh` (versions): View and manage file version history
 
 View, restore, or delete file version history.
 
@@ -735,7 +735,7 @@ pc vh rm 42                   # Delete version #42
 ```
 
 
-#### `vh dl` — Download a specific version
+#### `vh dl`: Download a specific version
 
 
 ```bash
@@ -744,7 +744,7 @@ pc vh dl /report.pdf 42 old.pdf  # Download to specific file
 ```
 
 
-#### `vh prune` — Delete all but the last N versions
+#### `vh prune`: Delete all but the last N versions
 
 
 ```bash
@@ -753,7 +753,7 @@ pc vh prune /report.pdf --keep 0    # Delete all versions
 ```
 
 
-### `ch` (chat) — Send and receive E2EE chat messages
+### `ch` (chat): Send and receive E2EE chat messages
 
 Encrypted chat with other PigCloud users (requires friendship).
 
@@ -782,7 +782,7 @@ pc ch send alice -f /Photos      # Share a file
 ```
 
 
-### `fr` (friend) — Manage friends
+### `fr` (friend): Manage friends
 
 
 ```bash
@@ -795,7 +795,7 @@ pc fr pending             # List pending friend requests
 ```
 
 
-### `pl` (link) — Create and manage public links
+### `pl` (link): Create and manage public links
 
 Manage public links for files and directories.
 
@@ -813,7 +813,7 @@ pc pl rm /report.pdf                      # Revoke link
 ```
 
 
-### `sr` (share) — Manage shared files and folders
+### `sr` (share): Manage shared files and folders
 
 Manage shared files and folders.
 
@@ -830,7 +830,7 @@ pc sr set /Shared -P secret      # Add password
 ```
 
 
-#### `sr accept` — Accept a pending share
+#### `sr accept`: Accept a pending share
 
 
 ```bash
@@ -838,7 +838,7 @@ pc sr accept /Documents alice     # Accept a share from alice
 ```
 
 
-#### `sr add` — Share a folder with a user
+#### `sr add`: Share a folder with a user
 
 
 ```bash
@@ -846,7 +846,7 @@ pc sr add alice /Documents    # Share with alice
 ```
 
 
-#### `sr inbox` — List shares you've received from others
+#### `sr inbox`: List shares you've received from others
 
 
 ```bash
@@ -854,7 +854,7 @@ pc sr inbox                      # Show folders shared with you
 ```
 
 
-#### `sr set` — Update share settings (permission, password, expiry)
+#### `sr set`: Update share settings (permission, password, expiry)
 
 Update settings on an existing share.
 
@@ -870,7 +870,7 @@ Remove password/expiration:
   sr set /Docs --remove-expiration
 
 
-### `ac` (activity) — View activity log and notifications
+### `ac` (activity): View activity log and notifications
 
 View your recent activity and notifications.
 
@@ -887,11 +887,11 @@ pc ac -m 42                       # Mark a specific event as read
 ```
 
 
-### `ak` (apikeys) — View or revoke your API key
+### `ak` (apikeys): View or revoke your API key
 
 Show the status of your PigCloud API key, or revoke it.
 
-PigCloud issues a single API key per account — the same key this CLI uses to
+PigCloud issues a single API key per account, the same key this CLI uses to
 authenticate. 'pc ak' shows its identifier, creation time, and last use.
 
 'pc ak revoke' invalidates the key server-side so it stops working everywhere,
@@ -905,7 +905,7 @@ pc ak revoke          # Revoke the API key (logs this CLI out)
 ```
 
 
-### `cf` (config) — Manage CLI configuration
+### `cf` (config): Manage CLI configuration
 
 View and modify CLI configuration settings.
 
@@ -924,14 +924,14 @@ Valid configuration keys:
   language      - Server message language: en or de (default en)
 
 
-#### `cf get` — Get a configuration value
+#### `cf get`: Get a configuration value
 
 Get a specific configuration value.
 
 Valid keys: api_key, endpoint, cwd, default_json, default_quiet, no_color, language
 
 
-#### `cf set` — Set a configuration value
+#### `cf set`: Set a configuration value
 
 Set a configuration value.
 
@@ -944,7 +944,7 @@ pc cf set endpoint https://custom.example.com/api
 ```
 
 
-### `cm` (completion) — Generate shell completion scripts
+### `cm` (completion): Generate shell completion scripts
 
 Generate shell completion scripts for PigCloud CLI.
 
@@ -971,7 +971,7 @@ PowerShell:
   PS> pigcloud completion powershell >> $PROFILE
 
 
-### `dr` (doctor) — Diagnose the CLI setup
+### `dr` (doctor): Diagnose the CLI setup
 
 Check the local CLI setup: credentials, endpoint reachability, encryption
 keys, the key agent, mount backends, and the mount daemon. Exits non-zero
@@ -984,7 +984,7 @@ pc dr --json
 ```
 
 
-### `du` (usage) — Show storage breakdown by file type
+### `du` (usage): Show storage breakdown by file type
 
 Analyze storage usage broken down by file type.
 
@@ -996,7 +996,7 @@ pc du    # Show storage breakdown
 ```
 
 
-### `hi` (welcome) — Quickstart tour for the PigCloud CLI
+### `hi` (welcome): Quickstart tour for the PigCloud CLI
 
 Print a quickstart tour covering identity, common commands, and power
 features. Re-run anytime to refresh your memory.
@@ -1007,19 +1007,19 @@ pc hi                             # Friendly walkthrough of the CLI
 ```
 
 
-### `hl` (help) — Show help for commands
+### `hl` (help): Show help for commands
 
 Display help information about PigCloud CLI commands.
 
 
-### `in` (info) — Show file or directory info
+### `in` (info): Show file or directory info
 
 Display detailed information about a file or directory.
 
 Shows size, dates, type, sharing status, and recipients for shared folders.
 
 
-### `op` (open) — Open a file or folder in the browser
+### `op` (open): Open a file or folder in the browser
 
 Open a file or folder in your default web browser.
 
@@ -1033,7 +1033,7 @@ pc op /photos                     # Open the photos folder
 ```
 
 
-### `rc` (recents) — List recently accessed files
+### `rc` (recents): List recently accessed files
 
 Show files and folders you've recently opened or accessed.
 
@@ -1044,7 +1044,7 @@ pc rc -n 10        # Show last 10 recent items
 ```
 
 
-### `sh` (shell) — Start an interactive shell
+### `sh` (shell): Start an interactive shell
 
 Start an interactive shell for running multiple commands.
 
@@ -1059,7 +1059,7 @@ Example session:
   /Documents > exit
 
 
-### `ss` (sessions) — Manage active sessions and devices
+### `ss` (sessions): Manage active sessions and devices
 
 View and manage active login sessions and trusted devices.
 
@@ -1076,12 +1076,12 @@ pc ss forget <device-id>       # Remove a trusted device
 ```
 
 
-### `st` (stats) — Show storage statistics
+### `st` (stats): Show storage statistics
 
 Display storage usage statistics for your account.
 
 
-### `vf` (verify) — Verify file signatures
+### `vf` (verify): Verify file signatures
 
 Download every file under a path and run the strict-AND signature check
 (owner-key pin, or TEE signatures for sanitized files). Bytes are verified
@@ -1099,12 +1099,12 @@ pc vf -n 100         # Stop after 100 files
 ```
 
 
-### `vr` (version) — Show version information
+### `vr` (version): Show version information
 
 Display the version, commit hash, and build date of the CLI.
 
 
-### `xp` (export) — Export all personal data
+### `xp` (export): Export all personal data
 
 Download all personal data associated with your account as a JSON file.
 
@@ -1127,7 +1127,7 @@ Configuration is stored in:
 ```json
 {
   "api_key": "pc_live_abc123...",
-  "endpoint": "https://pigtech.de/cloud/actions.php",
+  "endpoint": "https://pigcloud.de/cloud/actions.php",
   "cwd": "/Documents",
   "e2ee_public_key": "base64...",
   "e2ee_private_key": "base64...(encrypted)"

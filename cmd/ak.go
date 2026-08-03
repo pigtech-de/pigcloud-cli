@@ -24,7 +24,7 @@ var akCmd = &cobra.Command{
 	Short:   "View or revoke your API key",
 	Long: `Show the status of your PigCloud API key, or revoke it.
 
-PigCloud issues a single API key per account — the same key this CLI uses to
+PigCloud issues a single API key per account, the same key this CLI uses to
 authenticate. 'pc ak' shows its identifier, creation time, and last use.
 
 'pc ak revoke' invalidates the key server-side so it stops working everywhere,

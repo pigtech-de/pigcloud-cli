@@ -1,16 +1,14 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var statCmd = &cobra.Command{
@@ -30,12 +28,26 @@ func init() {
 }
 
 func runStat() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	_, payload := cmdutil.ExecuteCommand[api.StatPayload](ctx, "st", map[string]string{}, ExitWithError)
+	if built := loadClientTree(ctx); built != nil {
+		files, folders := 0, 0
+		for _, id := range built.Descendants("") {
+			node, ok := built.Get(id)
+			if !ok || node.Trashed {
+				continue
+			}
+			if node.IsDir {
+				folders++
+			} else {
+				files++
+			}
+		}
+		payload.FileCount = files
+		payload.FolderCount = folders
+	}
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
 		return
 	}

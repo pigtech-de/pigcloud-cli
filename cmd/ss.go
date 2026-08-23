@@ -6,11 +6,12 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var ssCmd = &cobra.Command{
@@ -84,8 +85,7 @@ func init() {
 }
 
 func runSessionList() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.SessionsPayload](ctx, "ss", map[string]string{
@@ -135,8 +135,7 @@ func runSessionList() {
 }
 
 func runSessionRevoke(sessionID string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, _ := cmdutil.ExecuteCommand[any](ctx, "ss", map[string]string{
@@ -166,8 +165,7 @@ func runSessionRevokeAll() {
 }
 
 func runSessionDevices() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.SessionsPayload](ctx, "ss", map[string]string{
@@ -196,8 +194,7 @@ func runSessionDevices() {
 }
 
 func runSessionForget(deviceID string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, _ := cmdutil.ExecuteCommand[any](ctx, "ss", map[string]string{

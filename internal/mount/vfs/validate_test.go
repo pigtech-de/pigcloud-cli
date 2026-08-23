@@ -1,31 +1,94 @@
 package vfs
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"pigcloud/internal/filetypes"
 )
 
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 func TestValidateFile_ExtensionsTrackRegistry(t *testing.T) {
-	cases := []string{
-		"pdf", "jpg", "png", "gif", "svg", "webp",
-		"mp3", "wav", "flac", "mp4", "mov", "webm",
-		"zip", "tar", "gz", "7z", "rar",
-		"py", "go", "rs", "js", "mjs", "ts", "html", "css", "json", "yaml", "toml", "md",
-		"sh", "ps1", "bat", "Dockerfile", "Makefile",
-		"exe", "deb", "rpm", "msi", "dmg", "apk",
-		"scr", "fakeext123", "qqqqqqq", "definitely-not-a-real-ext",
+	exts := filetypes.Extensions()
+	if len(exts) == 0 {
+		t.Fatal("registry exposed no extensions; this guard would be vacuous")
+	}
+	sort.Strings(exts)
+
+	for _, ext := range exts {
+		name := "test." + ext
+		if !validNameRegex.MatchString(name) {
+			continue
+		}
+		ok, reason := ValidateFile(name, 1024)
+		if !ok {
+			t.Errorf("ValidateFile(%q) = false (%q) but %q is a registry extension of type %q",
+				name, reason, ext, filetypes.TypeOf(ext))
+		}
 	}
 
-	for _, ext := range cases {
-		t.Run(ext, func(t *testing.T) {
-			name := "test." + ext
-			ok, reason := ValidateFile(name, 1024)
-			registryType := filetypes.TypeOf(ext)
-			wantOK := registryType != "other"
-			if ok != wantOK {
-				t.Errorf("ValidateFile(%q) ok=%v but filetypes.TypeOf(%q)=%q (want ok=%v); reason=%q",
-					name, ok, ext, registryType, wantOK, reason)
+	for _, ext := range []string{"fakeext123", "qqqqqqq", "definitely-not-a-real-ext"} {
+		if filetypes.TypeOf(ext) != "other" {
+			t.Fatalf("%q is now a registry extension; pick another unknown for this guard", ext)
+		}
+		name := "test." + ext
+		if ok, _ := ValidateFile(name, 1024); ok {
+			t.Errorf("ValidateFile(%q) = true for an extension absent from the registry", name)
+		}
+	}
+}
+
+func TestValidateFile_ExtensionCaseDoesNotChangeTheVerdict(t *testing.T) {
+	exts := filetypes.Extensions()
+	if len(exts) == 0 {
+		t.Fatal("registry exposed no extensions; this guard would be vacuous")
+	}
+	sort.Strings(exts)
+
+	checked := 0
+	for _, ext := range exts {
+		upper := strings.ToUpper(ext)
+		if upper == ext {
+			continue
+		}
+		if ok, _ := ValidateFile("test."+ext, 1024); !ok {
+			continue
+		}
+		checked++
+		for _, variant := range []string{upper, capitalize(ext)} {
+			name := "test." + variant
+			if ok, reason := ValidateFile(name, 1024); !ok {
+				t.Errorf("ValidateFile(%q) = false (%q) but the lowercase %q is accepted", name, reason, "test."+ext)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no registry extension had a distinct uppercase form; this guard would be vacuous")
+	}
+}
+
+func TestValidateFile_UppercaseRegressionCases(t *testing.T) {
+	for _, name := range []string{"IMG_1234.JPG", "CLIP.MP4", "Scan.PDF", "Notes.TXT"} {
+		t.Run(name, func(t *testing.T) {
+			if ok, reason := ValidateFile(name, 1024); !ok {
+				t.Errorf("ValidateFile(%q) = false (%q); camera and Windows files must sync", name, reason)
+			}
+		})
+	}
+}
+
+func TestValidateFile_UnknownExtensionRejectedInAnyCase(t *testing.T) {
+	for _, name := range []string{"x.qqqqqqq", "x.QQQQQQQ", "x.QqQqQqQ"} {
+		t.Run(name, func(t *testing.T) {
+			if ok, _ := ValidateFile(name, 1024); ok {
+				t.Errorf("ValidateFile(%q) = true for an extension absent from the registry", name)
 			}
 		})
 	}

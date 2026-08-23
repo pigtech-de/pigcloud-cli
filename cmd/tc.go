@@ -1,25 +1,24 @@
 package cmd
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path"
-	"path/filepath"
 	"strings"
 	"syscall"
 
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var tcContent string
@@ -71,9 +70,7 @@ func init() {
 }
 
 func runTouch(name, targetDir string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	content := tcContent
@@ -88,9 +85,9 @@ func runTouch(name, targetDir string) {
 
 	resolvedPath := cmdutil.ResolvePath(targetDir)
 
-	pubKey := cmdutil.GetPublicKey(ExitWithError)
-	teeKeys := cmdutil.FetchTeeEnclaveKeySet()
-	if teeKeys == nil {
+	pubKey := e2ee.GetPublicKey(ExitWithError)
+	teeKeys := e2ee.FetchTeeEnclaveKeySet()
+	if teeKeys == nil && !e2ee.TeeScannerDisabledByServer() {
 		output.PrintError("Security scanner is not reachable. Please try again shortly.")
 		ExitWithError()
 	}
@@ -137,10 +134,14 @@ func runTouch(name, targetDir string) {
 		ExitWithError()
 	}
 
-	teeSealed, err := crypto.SealDataKey(dataKey, teeKeys)
-	if err != nil {
-		output.PrintError("Failed to seal data key to enclave: " + err.Error())
-		ExitWithError()
+	teeSealedB64 := ""
+	if teeKeys != nil {
+		teeSealed, err := crypto.SealDataKey(dataKey, teeKeys)
+		if err != nil {
+			output.PrintError("Failed to seal data key to enclave: " + err.Error())
+			ExitWithError()
+		}
+		teeSealedB64 = base64.StdEncoding.EncodeToString(teeSealed)
 	}
 
 	metaJSON, err := json.Marshal(meta)
@@ -149,7 +150,7 @@ func runTouch(name, targetDir string) {
 		ExitWithError()
 	}
 
-	sigEd, sigMl, pkEd, pkMl := cmdutil.SignEncryptedFile(tmpOutPath, ExitWithError)
+	sigEd, sigMl, pkEd, pkMl := e2ee.SignEncryptedFile(tmpOutPath, ExitWithError)
 
 	options := map[string]string{
 		"source":             resolvedPath,
@@ -157,14 +158,14 @@ func runTouch(name, targetDir string) {
 		"content":            base64.StdEncoding.EncodeToString(encryptedBytes),
 		"sealed_key":         base64.StdEncoding.EncodeToString(sealedKey),
 		"encryption_meta":    base64.StdEncoding.EncodeToString(metaJSON),
-		"tee_sealed_key":     base64.StdEncoding.EncodeToString(teeSealed),
+		"tee_sealed_key":     teeSealedB64,
 		"signature_ed25519":  sigEd,
 		"signature_mldsa":    sigMl,
 		"signing_pk_ed25519": pkEd,
 		"signing_pk_mldsa":   pkMl,
 	}
 
-	if nameKey := cmdutil.GetNameKey(ExitWithError); nameKey != nil {
+	if nameKey := e2ee.GetNameKey(ExitWithError); nameKey != nil {
 		if hmac, err := crypto.ComputePlaintextHmac(meta.PlaintextSHA256, nameKey); err == nil {
 			options["plaintext_hmac"] = hmac
 		}
@@ -177,18 +178,9 @@ func runTouch(name, targetDir string) {
 	} else {
 		fullNodePath = parentPath + "/" + name
 	}
-	cmdutil.AddE2eeNameFields(options, name, fullNodePath, ExitWithError)
+	e2ee.AddE2eeNameFields(options, name, fullNodePath, ExitWithError)
 
-	{
-		paths := []string{fullNodePath}
-		if parentPath != "" && parentPath != "/" {
-			paths = append(paths, parentPath)
-			if parentDir := filepath.Dir(parentPath); parentDir != "." && parentDir != "" {
-				paths = append(paths, parentDir)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensForAll(options, []string{fullNodePath, parentPath}, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.TouchPayload](ctx, "tc", options, ExitWithError)
 

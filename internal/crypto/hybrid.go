@@ -15,6 +15,8 @@ import (
 const (
 	HybridKDFInfo = "pigcloud-hybrid-seal-v2"
 
+	X25519KeySize = 32
+
 	KyberPublicKeySize  = 1184
 	KyberSeedSize       = 64
 	KyberCiphertextSize = 1088
@@ -256,6 +258,12 @@ func DecryptHybridPrivateKey(enc *EncryptedHybridPrivateKey, password []byte) (*
 func DecryptHybridPrivateKeyWithRawKey(enc *EncryptedHybridPrivateKey, pdk []byte) (*PrivateKeySet, error) {
 	if len(pdk) != KeySize {
 		return nil, fmt.Errorf("pdk must be %d bytes", KeySize)
+	}
+	if len(enc.X25519Nonce) != NonceSize {
+		return nil, fmt.Errorf("x25519 nonce must be %d bytes, got %d", NonceSize, len(enc.X25519Nonce))
+	}
+	if len(enc.KyberNonce) != NonceSize {
+		return nil, fmt.Errorf("kyber nonce must be %d bytes, got %d", NonceSize, len(enc.KyberNonce))
 	}
 	aead, err := chacha20poly1305.NewX(pdk)
 	if err != nil {

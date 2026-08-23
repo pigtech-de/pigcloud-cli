@@ -11,8 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
+
+	"pigcloud/internal/fsutil"
 )
 
 const (
@@ -34,6 +38,8 @@ type Store struct {
 	dir string
 	cek []byte
 
+	bytes atomic.Int64
+
 	mu sync.Mutex
 
 	chunkMu    sync.Mutex
@@ -54,7 +60,55 @@ func NewStore(cacheDir string) (*Store, error) {
 		return nil, fmt.Errorf("generate CEK: %w", err)
 	}
 
-	return &Store{dir: storeDir, cek: cek}, nil
+	s := &Store{dir: storeDir, cek: cek}
+	s.bytes.Store(s.walkBytes())
+	return s, nil
+}
+
+func (s *Store) Bytes() int64 {
+	n := s.bytes.Load()
+	if n >= 0 {
+		return n
+	}
+	return s.ResyncBytes()
+}
+
+func (s *Store) ResyncBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := s.walkBytes()
+	s.bytes.Store(total)
+	return total
+}
+
+func (s *Store) walkBytes() int64 {
+	var total int64
+	shards, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0
+	}
+	for _, shard := range shards {
+		if !shard.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(s.dir, shard.Name()))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || isTempName(e.Name()) {
+				continue
+			}
+			if info, ierr := e.Info(); ierr == nil {
+				total += info.Size()
+			}
+		}
+	}
+	return total
+}
+
+func isTempName(name string) bool {
+	return strings.HasPrefix(name, ".pigcloud-tmp-") || strings.HasPrefix(name, ".tmp-")
 }
 
 func (s *Store) Close() {
@@ -83,7 +137,7 @@ func (s *Store) Put(data []byte) (string, error) {
 		return "", fmt.Errorf("create AEAD: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), fsutil.TempPattern)
 	if err != nil {
 		return "", fmt.Errorf("create temp cache file: %w", err)
 	}
@@ -127,6 +181,10 @@ func (s *Store) Put(data []byte) (string, error) {
 	if err := tmp.Sync(); err != nil {
 		return "", fmt.Errorf("sync cache file: %w", err)
 	}
+	written := int64(0)
+	if fi, statErr := tmp.Stat(); statErr == nil {
+		written = fi.Size()
+	}
 	if err := tmp.Close(); err != nil {
 		return "", fmt.Errorf("close cache file: %w", err)
 	}
@@ -134,16 +192,115 @@ func (s *Store) Put(data []byte) (string, error) {
 		return "", fmt.Errorf("commit cache file: %w", err)
 	}
 	committed = true
+	s.bytes.Add(written)
 
 	return hash, nil
 }
 
-func (s *Store) PutFile(srcPath string) (string, error) {
-	data, err := os.ReadFile(srcPath)
+func (s *Store) sealStream(r io.Reader, hash string, out io.Writer) (int64, error) {
+	aead, err := chacha20poly1305.NewX(s.cek)
 	if err != nil {
-		return "", fmt.Errorf("read source file: %w", err)
+		return 0, fmt.Errorf("create AEAD: %w", err)
 	}
-	return s.Put(data)
+	buf := make([]byte, cacheChunkSize)
+	lenBuf := make([]byte, 4)
+	var total int64
+	for {
+		n, readErr := io.ReadFull(r, buf)
+		if n > 0 {
+			nonce := make([]byte, nonceSize)
+			if _, err := rand.Read(nonce); err != nil {
+				return total, fmt.Errorf("generate nonce: %w", err)
+			}
+			ciphertext := aead.Seal(nil, nonce, buf[:n], chunkAD(uint64(total), hash))
+			binary.BigEndian.PutUint32(lenBuf, uint32(len(ciphertext)))
+			if _, err := out.Write(lenBuf); err != nil {
+				return total, err
+			}
+			if _, err := out.Write(nonce); err != nil {
+				return total, err
+			}
+			if _, err := out.Write(ciphertext); err != nil {
+				return total, err
+			}
+			total += int64(n)
+		}
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+			break
+		}
+		if readErr != nil {
+			return total, fmt.Errorf("read plaintext: %w", readErr)
+		}
+	}
+	return total, nil
+}
+
+func (s *Store) PutFile(srcPath string) (string, error) {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("open source file: %w", err)
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		f.Close()
+		return "", fmt.Errorf("hash source file: %w", err)
+	}
+	f.Close()
+	hash := fmt.Sprintf("%x", hasher.Sum(nil))
+	path := s.pathFor(hash)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := os.Stat(path); err == nil {
+		return hash, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", fmt.Errorf("create shard dir: %w", err)
+	}
+
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("reopen source file: %w", err)
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), fsutil.TempPattern)
+	if err != nil {
+		return "", fmt.Errorf("create temp cache file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			tmp.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+
+	verifier := sha256.New()
+	if _, err := s.sealStream(io.TeeReader(in, verifier), hash, tmp); err != nil {
+		return "", err
+	}
+	if fmt.Sprintf("%x", verifier.Sum(nil)) != hash {
+		return "", fmt.Errorf("source file changed during ingest")
+	}
+	if err := tmp.Sync(); err != nil {
+		return "", fmt.Errorf("sync cache file: %w", err)
+	}
+	written := int64(0)
+	if fi, statErr := tmp.Stat(); statErr == nil {
+		written = fi.Size()
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close cache file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("commit cache file: %w", err)
+	}
+	committed = true
+	s.bytes.Add(written)
+	return hash, nil
 }
 
 func (s *Store) Get(hash string) ([]byte, error) {
@@ -191,6 +348,57 @@ func (s *Store) Get(hash string) ([]byte, error) {
 	}
 
 	return result, nil
+}
+
+func (s *Store) WriteTo(hash string, w io.Writer) (int64, error) {
+	path := s.pathFor(hash)
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("open cache file: %w", err)
+	}
+	defer f.Close()
+
+	aead, err := chacha20poly1305.NewX(s.cek)
+	if err != nil {
+		return 0, fmt.Errorf("create AEAD: %w", err)
+	}
+
+	var written int64
+	offset := uint64(0)
+	lenBuf := make([]byte, 4)
+	nonceBuf := make([]byte, nonceSize)
+
+	for {
+		if _, err := io.ReadFull(f, lenBuf); err == io.EOF {
+			break
+		} else if err != nil {
+			return written, fmt.Errorf("read chunk length: %w", err)
+		}
+
+		chunkLen := binary.BigEndian.Uint32(lenBuf)
+		if _, err := io.ReadFull(f, nonceBuf); err != nil {
+			return written, fmt.Errorf("read nonce: %w", err)
+		}
+
+		ciphertext := make([]byte, chunkLen)
+		if _, err := io.ReadFull(f, ciphertext); err != nil {
+			return written, fmt.Errorf("read ciphertext: %w", err)
+		}
+
+		plaintext, err := aead.Open(nil, nonceBuf, ciphertext, chunkAD(offset, hash))
+		if err != nil {
+			return written, fmt.Errorf("decrypt chunk at offset %d: %w", offset, err)
+		}
+
+		n, err := w.Write(plaintext)
+		written += int64(n)
+		if err != nil {
+			return written, fmt.Errorf("write chunk at offset %d: %w", offset, err)
+		}
+		offset += uint64(len(plaintext))
+	}
+
+	return written, nil
 }
 
 func (s *Store) ReadAt(hash string, off int64, size int) ([]byte, error) {
@@ -347,7 +555,18 @@ func (s *Store) Remove(hash string) error {
 		return nil
 	}
 	s.chunkCacheDrop(hash)
-	return os.Remove(s.pathFor(hash))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.pathFor(hash)
+	var size int64
+	if fi, err := os.Stat(path); err == nil {
+		size = fi.Size()
+	}
+	err := os.Remove(path)
+	if err == nil {
+		s.bytes.Add(-size)
+	}
+	return err
 }
 
 func (s *Store) Size(hash string) (int64, error) {
@@ -384,7 +603,7 @@ func (s *Store) ListHashes() ([]string, error) {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() || strings.HasPrefix(e.Name(), ".tmp-") {
+			if e.IsDir() || isTempName(e.Name()) {
 				continue
 			}
 			hashes = append(hashes, shard.Name()+e.Name())
@@ -393,6 +612,49 @@ func (s *Store) ListHashes() ([]string, error) {
 	return hashes, nil
 }
 
+func (s *Store) GCTempFiles(minAge time.Duration) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	shards, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	cutoff := time.Now().Add(-minAge)
+	removed := 0
+	for _, shard := range shards {
+		if !shard.IsDir() {
+			continue
+		}
+		shardDir := filepath.Join(s.dir, shard.Name())
+		entries, err := os.ReadDir(shardDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !isTempName(e.Name()) {
+				continue
+			}
+			info, ierr := e.Info()
+			if ierr != nil || info.ModTime().After(cutoff) {
+				continue
+			}
+			if os.Remove(filepath.Join(shardDir, e.Name())) == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
 func (s *Store) CleanAll() error {
-	return os.RemoveAll(s.dir)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.RemoveAll(s.dir)
+	s.bytes.Store(0)
+	return err
 }

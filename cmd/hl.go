@@ -1,18 +1,16 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"strings"
+
+	"pigcloud/internal/api"
+	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/output"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
-	"pigcloud/internal/output"
 )
 
 var hlVerbose bool
@@ -170,8 +168,7 @@ func runHelpDetail(commandName string) {
 		return
 	}
 
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 	options := map[string]string{"source": commandName}
 	if hlVerbose {
@@ -202,6 +199,8 @@ func findLocalCommand(name string) *cobra.Command {
 		"vr": true, "version": true,
 		"mn": true, "mount": true,
 		"di": true, "diff": true,
+		"dr": true, "doctor": true,
+		"vf": true, "verify": true,
 		"hi": true, "welcome": true,
 	}
 	if !clientOnly[name] {

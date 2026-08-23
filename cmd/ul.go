@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var ulCmd = &cobra.Command{
@@ -62,9 +63,7 @@ func init() {
 }
 
 func runUpload(localPath, remotePath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	stdinMode := localPath == "-"
@@ -120,17 +119,7 @@ func runUpload(localPath, remotePath string) {
 			remoteCheck = remoteCheck + fileName
 		}
 		inOpts := map[string]string{"source": remoteCheck}
-		if cmdutil.HasE2EEKeys() {
-			trimmed := strings.TrimPrefix(remoteCheck, "/")
-			var inPaths []string
-			if trimmed != "" {
-				inPaths = append(inPaths, trimmed)
-				if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-					inPaths = append(inPaths, parent)
-				}
-			}
-			cmdutil.AddPathTokens(inOpts, inPaths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(inOpts, remoteCheck, e2ee.SelfAndParent, ExitWithError)
 		client := api.NewClient()
 		resp, _ := client.Execute(ctx, "in", inOpts)
 		if resp != nil && resp.Success {
@@ -145,9 +134,16 @@ func runUpload(localPath, remotePath string) {
 	fileSize := stat.Size()
 	plainSize := stat.Size()
 
+	fullUploadPath := resolvedPath
+	if strings.HasSuffix(fullUploadPath, "/") {
+		fullUploadPath += fileName
+	} else {
+		fullUploadPath += "/" + fileName
+	}
+
 	var e2eeOpts map[string]string
-	if cmdutil.HasE2EEKeys() {
-		encPath, sealedKey, encMeta, teeSealedKey, plaintextHmac := cmdutil.HandleE2EEUpload(localPath, ExitWithError)
+	if e2ee.HasE2EEKeys() {
+		encPath, sealedKey, encMeta, teeSealedKey, plaintextHmac := e2ee.HandleE2EEUpload(localPath, ExitWithError)
 		defer os.Remove(encPath)
 		uploadPath = encPath
 		e2eeOpts = map[string]string{
@@ -165,38 +161,29 @@ func runUpload(localPath, remotePath string) {
 		if ulForce {
 			e2eeOpts["force"] = "true"
 		}
-		sigEd, sigMl, pkEd, pkMl := cmdutil.SignEncryptedFile(encPath, ExitWithError)
+		sigEd, sigMl, pkEd, pkMl := e2ee.SignEncryptedFile(encPath, ExitWithError)
 		e2eeOpts["signature_ed25519"] = sigEd
 		e2eeOpts["signature_mldsa"] = sigMl
 		e2eeOpts["signing_pk_ed25519"] = pkEd
 		e2eeOpts["signing_pk_mldsa"] = pkMl
-		fullUploadPath := resolvedPath
-		if strings.HasSuffix(fullUploadPath, "/") {
-			fullUploadPath += fileName
-		} else {
-			fullUploadPath += "/" + fileName
-		}
 		uploadFullPath := strings.TrimLeft(fullUploadPath, "/")
-		cmdutil.AddE2eeNameFields(e2eeOpts, fileName, uploadFullPath, ExitWithError)
+		e2ee.AddE2eeNameFields(e2eeOpts, fileName, uploadFullPath, ExitWithError)
 
-		trimmedTarget := strings.TrimPrefix(resolvedPath, "/")
-		var tokenPaths []string
-		if trimmedTarget != "" && trimmedTarget != "/" {
-			tokenPaths = append(tokenPaths, trimmedTarget)
-			if parent := filepath.Dir(trimmedTarget); parent != "." && parent != "" {
-				tokenPaths = append(tokenPaths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(e2eeOpts, tokenPaths, ExitWithError)
+		e2ee.AddPathTokensFor(e2eeOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 		if encStat, err := os.Stat(encPath); err == nil {
 			fileSize = encStat.Size()
 		}
 	}
 
+	client := api.NewClient()
+	if forceCollisionBlocked(ctx, client, fullUploadPath, fileSize) {
+		output.PrintError(fullUploadPath + " already exists. " + forceCollisionHint)
+		ExitWithError()
+	}
+
 	bar := output.NewProgressBar(fileSize, "Uploading "+fileName)
 
-	client := api.NewClient()
 	resp, err := client.Upload(ctx, uploadPath, resolvedPath, func(sent, total int64) {
 		bar.Set64(sent)
 	}, e2eeOpts)
@@ -224,7 +211,7 @@ func runUpload(localPath, remotePath string) {
 	}
 
 	if payload.NodeID != "" {
-		cmdutil.PropagateNameToShares(ctx, payload.NodeID, fileName)
+		e2ee.PropagateNameToShares(ctx, payload.NodeID, fileName)
 	}
 
 	if !GetQuietOutput() {
@@ -283,60 +270,19 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 	dirs := collectDirs(localDir)
 	client := api.NewClient()
 
-	mkOpts := map[string]string{
-		"source":  remoteRoot,
-		"parents": "true",
-	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(remoteRoot, "/")
-		var mkPaths []string
-		if trimmed != "" {
-			mkPaths = append(mkPaths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				mkPaths = append(mkPaths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(mkOpts, mkPaths, ExitWithError)
-		if trimmed != "" {
-			segments := strings.Split(trimmed, "/")
-			cmdutil.AddE2eeNameFieldsForMkParents(mkOpts, segments, ExitWithError)
-		}
-	}
-	_, err = client.Execute(ctx, "mk", mkOpts)
-	if err != nil {
+	if err := ensureRemoteDir(ctx, client, remoteRoot); err != nil {
 		output.PrintError("Failed to create remote directory: " + err.Error())
 		ExitWithError()
 	}
-
 	for _, dir := range dirs {
 		remoteDirPath := remoteRoot + "/" + filepath.ToSlash(dir)
-		subMkOpts := map[string]string{
-			"source":  remoteDirPath,
-			"parents": "true",
-		}
-		if cmdutil.HasE2EEKeys() {
-			trimmed := strings.TrimPrefix(remoteDirPath, "/")
-			var subPaths []string
-			if trimmed != "" {
-				subPaths = append(subPaths, trimmed)
-				if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-					subPaths = append(subPaths, parent)
-				}
-			}
-			cmdutil.AddPathTokens(subMkOpts, subPaths, ExitWithError)
-			if trimmed != "" {
-				segments := strings.Split(trimmed, "/")
-				cmdutil.AddE2eeNameFieldsForMkParents(subMkOpts, segments, ExitWithError)
-			}
-		}
-		_, err := client.Execute(ctx, "mk", subMkOpts)
-		if err != nil {
+		if err := ensureRemoteDir(ctx, client, remoteDirPath); err != nil {
 			output.PrintWarning("Failed to create directory " + remoteDirPath + ": " + err.Error())
 		}
 	}
 
 	var succeeded, failed, skipped int64
-	useE2EE := cmdutil.HasE2EEKeys()
+	useE2EE := e2ee.HasE2EEKeys()
 
 	uploadOne := func(i int, f fileEntry) {
 		remoteFilePath := remoteRoot + "/" + filepath.ToSlash(f.relPath)
@@ -344,15 +290,7 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 		if ulSkipExisting {
 			skipOpts := map[string]string{"source": remoteFilePath}
 			if useE2EE {
-				trimmed := strings.TrimPrefix(remoteFilePath, "/")
-				var skipPaths []string
-				if trimmed != "" {
-					skipPaths = append(skipPaths, trimmed)
-					if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-						skipPaths = append(skipPaths, parent)
-					}
-				}
-				cmdutil.AddPathTokens(skipOpts, skipPaths, ExitWithError)
+				e2ee.AddPathTokensFor(skipOpts, remoteFilePath, e2ee.SelfAndParent, ExitWithError)
 			}
 			resp, _ := client.Execute(ctx, "in", skipOpts)
 			if resp != nil && resp.Success {
@@ -374,7 +312,7 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 		var tempEncrypted string
 
 		if useE2EE {
-			encPath, sealedKey, encMeta, teeSealedKey, plaintextHmac := cmdutil.HandleE2EEUpload(f.localPath, ExitWithError)
+			encPath, sealedKey, encMeta, teeSealedKey, plaintextHmac := e2ee.HandleE2EEUpload(f.localPath, ExitWithError)
 			tempEncrypted = encPath
 			uploadPath = encPath
 			e2eeOpts = map[string]string{
@@ -394,23 +332,17 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 			if ulForce {
 				e2eeOpts["force"] = "true"
 			}
-			sigEd, sigMl, pkEd, pkMl := cmdutil.SignEncryptedFile(encPath, ExitWithError)
+			sigEd, sigMl, pkEd, pkMl := e2ee.SignEncryptedFile(encPath, ExitWithError)
 			e2eeOpts["signature_ed25519"] = sigEd
 			e2eeOpts["signature_mldsa"] = sigMl
 			e2eeOpts["signing_pk_ed25519"] = pkEd
 			e2eeOpts["signing_pk_mldsa"] = pkMl
 
 			fullUploadPath := strings.TrimLeft(remoteFilePath, "/")
-			cmdutil.AddE2eeNameFields(e2eeOpts, fileName, fullUploadPath, ExitWithError)
+			e2ee.AddE2eeNameFields(e2eeOpts, fileName, fullUploadPath, ExitWithError)
 
-			parentDir := filepath.Dir(fullUploadPath)
-			if parentDir != "." && parentDir != "" {
-				var tokenPaths []string
-				tokenPaths = append(tokenPaths, parentDir)
-				for p := filepath.Dir(parentDir); p != "." && p != ""; p = filepath.Dir(p) {
-					tokenPaths = append(tokenPaths, p)
-				}
-				cmdutil.AddPathTokens(e2eeOpts, tokenPaths, ExitWithError)
+			if parentDir := path.Dir(fullUploadPath); parentDir != "." && parentDir != "" {
+				e2ee.AddPathTokensFor(e2eeOpts, parentDir, e2ee.SelfAndAncestors, ExitWithError)
 			}
 
 			if encStat, err := os.Stat(encPath); err == nil {
@@ -418,9 +350,18 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 			}
 		}
 
+		if forceCollisionBlocked(ctx, client, remoteFilePath, uploadSize) {
+			if tempEncrypted != "" {
+				os.Remove(tempEncrypted)
+			}
+			output.PrintError("Skipping " + f.relPath + ": already exists. " + forceCollisionHint)
+			atomic.AddInt64(&failed, 1)
+			return
+		}
+
 		bar := output.NewProgressBar(uploadSize, label)
 
-		resp, err := client.Upload(ctx, uploadPath, remoteFilePath, func(sent, total int64) {
+		resp, err := client.Upload(ctx, uploadPath, remoteParentDir(remoteFilePath), func(sent, total int64) {
 			bar.Set64(sent)
 		}, e2eeOpts)
 
@@ -445,7 +386,7 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 		if useE2EE {
 			var payload api.UploadPayload
 			if err := json.Unmarshal(resp.Raw, &payload); err == nil && payload.NodeID != "" {
-				cmdutil.PropagateNameToShares(ctx, payload.NodeID, fileName)
+				e2ee.PropagateNameToShares(ctx, payload.NodeID, fileName)
 			}
 		}
 
@@ -497,6 +438,42 @@ func runRecursiveUpload(ctx context.Context, localDir, remotePath string) {
 			output.PrintSuccess(msg)
 		}
 	}
+}
+
+func ensureRemoteDir(ctx context.Context, client *api.Client, remotePath string) error {
+	options := map[string]string{
+		"source":  remotePath,
+		"parents": "true",
+	}
+	if e2ee.HasE2EEKeys() {
+		e2ee.AddPathTokensFor(options, remotePath, e2ee.SelfAndParent, ExitWithError)
+		if trimmed := strings.TrimPrefix(remotePath, "/"); trimmed != "" {
+			e2ee.AddE2eeNameFieldsForMkParents(options, strings.Split(trimmed, "/"), ExitWithError)
+		}
+	}
+	_, err := client.Execute(ctx, "mk", options)
+	return err
+}
+
+func forceCollisionBlocked(ctx context.Context, client *api.Client, remoteFilePath string, ciphertextSize int64) bool {
+	if !ulForce || !api.UploadIsChunked(ciphertextSize) {
+		return false
+	}
+	opts := map[string]string{"source": remoteFilePath}
+	e2ee.AddPathTokensFor(opts, remoteFilePath, e2ee.SelfAndParent, ExitWithError)
+	resp, err := client.Execute(ctx, "in", opts)
+	return err == nil && resp != nil && resp.Success
+}
+
+const forceCollisionHint = "--force cannot create a same-name copy for files this large. " +
+	"Re-run without --force to store the upload as a new version, or rename the file first."
+
+func remoteParentDir(remoteFilePath string) string {
+	dir := path.Dir(remoteFilePath)
+	if dir == "." || dir == "" {
+		return "/"
+	}
+	return dir
 }
 
 func collectDirs(root string) []string {

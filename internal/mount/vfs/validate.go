@@ -22,7 +22,7 @@ var ExcludedDirs = map[string]bool{
 }
 
 func ValidateFile(name string, size int64) (bool, string) {
-	ext := strings.TrimPrefix(filepath.Ext(name), ".")
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
 	if ext != "" {
 		fileType := filetypes.TypeOf(ext)
 		if fileType == "other" {

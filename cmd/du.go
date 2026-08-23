@@ -1,19 +1,18 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/filetypes"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var duCmd = &cobra.Command{
@@ -41,12 +40,11 @@ func classifyByName(name string) string {
 }
 
 func runDiskUsage() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := map[string]string{}
+	addSubtreeScope(ctx, options, "/")
 
 	_, payload := cmdutil.ExecuteCommand[api.DiskUsagePayload](ctx, "du", options, ExitWithError)
 
@@ -64,7 +62,7 @@ func runDiskUsage() {
 	buckets := map[string]*api.StorageCategory{}
 	for _, f := range payload.Files {
 		fileType := "other"
-		name := cmdutil.DecryptE2EEName(f.E2EEDisplayName)
+		name := e2ee.DecryptE2EEName(f.E2EEDisplayName)
 		if name != "(encrypted)" {
 			fileType = classifyByName(name)
 		}

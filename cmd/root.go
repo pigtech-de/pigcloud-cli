@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	"pigcloud/internal/api"
+	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
+	"pigcloud/internal/output"
+
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
-	"pigcloud/internal/config"
-	"pigcloud/internal/output"
 )
 
 var (
@@ -68,7 +69,7 @@ func GetRootCmd() *cobra.Command {
 }
 
 func Execute() {
-	defer cmdutil.ClearCachedKey()
+	defer e2ee.ClearCachedKey()
 	rootCmd.Long = longDescription + buildAliasLine()
 	err := rootCmd.Execute()
 	if err != nil {

@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/output"
@@ -89,8 +86,7 @@ func init() {
 }
 
 func runFriendList() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.FriendListPayload](ctx, "fr", map[string]string{
@@ -117,8 +113,7 @@ func runFriendList() {
 }
 
 func runFriendAdd(username string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, _ := cmdutil.ExecuteCommand[api.FriendActionPayload](ctx, "fr", map[string]string{
@@ -130,8 +125,7 @@ func runFriendAdd(username string) {
 }
 
 func runFriendRespond(username, action string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, _ := cmdutil.ExecuteCommand[api.FriendActionPayload](ctx, "fr", map[string]string{
@@ -143,8 +137,7 @@ func runFriendRespond(username, action string) {
 }
 
 func runFriendRemove(username string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, _ := cmdutil.ExecuteCommand[api.FriendActionPayload](ctx, "fr", map[string]string{
@@ -156,8 +149,7 @@ func runFriendRemove(username string) {
 }
 
 func runFriendPending() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.FriendPendingPayload](ctx, "fr", map[string]string{

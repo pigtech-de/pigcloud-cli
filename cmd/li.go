@@ -13,14 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"pigcloud/internal/api"
+	"pigcloud/internal/config"
+	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
+	"pigcloud/internal/output"
+
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
-	"pigcloud/internal/config"
-	"pigcloud/internal/crypto"
-	"pigcloud/internal/output"
 )
 
 var loginAPIKeyFlag string
@@ -226,7 +227,7 @@ func finishLogin(ctx context.Context, apiKey, sealedB64 string, ephPriv *crypto.
 	output.PrintSuccess("Login successful!")
 
 	if sealedB64 != "" && ephPriv != nil {
-		importErr := cmdutil.ImportDeviceTransferredKeys(sealedB64, ephPriv)
+		importErr := e2ee.ImportDeviceTransferredKeys(sealedB64, ephPriv)
 		if importErr == nil {
 			output.PrintSuccess("Encryption keys transferred. No password needed.")
 			output.PrintInfo("Config saved to: " + config.GetConfigPath())
@@ -240,7 +241,7 @@ func finishLogin(ctx context.Context, apiKey, sealedB64 string, ephPriv *crypto.
 	setupE2EEKeys(ctx, client)
 
 	if config.HasEncryptionKeys() && term.IsTerminal(int(syscall.Stdin)) {
-		pub, priv := cmdutil.GetKeyPair(func() {})
+		pub, priv := e2ee.GetKeyPair(func() {})
 		if pub != nil && priv != nil {
 			DeriveAndStartAgent(pub, priv)
 			output.PrintSuccess("Keys unlocked (expires in 1 hour)")

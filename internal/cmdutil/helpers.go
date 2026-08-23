@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path"
 	"runtime"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"pigcloud/internal/api"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
 )
 
@@ -28,17 +30,7 @@ func IsExistingDirectory(ctx context.Context, remotePath string) bool {
 		return true
 	}
 	options := map[string]string{"source": remotePath}
-	if HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(remotePath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := path.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		AddPathTokens(options, paths, func() {})
-	}
+	e2ee.AddPathTokensFor(options, remotePath, e2ee.SelfAndParent, func() {})
 	client := api.NewClient()
 	resp, err := client.Execute(ctx, "in", options)
 	if err != nil || resp == nil || !resp.Success {
@@ -154,10 +146,10 @@ func RenderServerDisplay(resp *api.Response) bool {
 	if err := json.Unmarshal(probe.Display, &blocks); err != nil || len(blocks) == 0 {
 		return false
 	}
-	if output.HasNameRefs(blocks) && !EnsureNamesReadable() {
+	if output.HasNameRefs(blocks) && !e2ee.EnsureNamesReadable() {
 		return true
 	}
-	output.RenderDisplay(os.Stdout, blocks, DecryptE2EEName)
+	output.RenderDisplay(os.Stdout, blocks, e2ee.DecryptE2EEName)
 	return true
 }
 
@@ -173,4 +165,9 @@ func ConfirmAction(prompt string, force bool) bool {
 	fmt.Scanln(&response)
 	response = strings.TrimSpace(strings.ToLower(response))
 	return response == "y" || response == "yes"
+}
+
+func StartAuthed(exitFn func()) (context.Context, context.CancelFunc) {
+	RequireLogin(exitFn)
+	return signal.NotifyContext(context.Background(), os.Interrupt)
 }

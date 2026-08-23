@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -12,6 +13,8 @@ const (
 	evictionTarget = 0.90
 
 	evictionBatchSize = 100
+
+	tempFileGrace = time.Hour
 )
 
 func ParseCacheSize(s string) (int64, error) {
@@ -58,7 +61,7 @@ func ParseCacheSize(s string) (int64, error) {
 }
 
 func ReleaseBlob(db *DB, store *Store, hash string, excludeID int64) {
-	if hash == "" {
+	if hash == "" || db == nil || store == nil {
 		return
 	}
 	n, err := db.CountCachedByHash(hash, excludeID)
@@ -68,26 +71,36 @@ func ReleaseBlob(db *DB, store *Store, hash string, excludeID int64) {
 	store.Remove(hash)
 }
 
-func GCOrphans(db *DB, store *Store) (int, error) {
+type GCSweep struct {
+	Blobs int
+	Temps int
+}
+
+func GCOrphans(db *DB, store *Store) (GCSweep, error) {
+	var swept GCSweep
+
 	referenced, err := db.AllCachedHashes()
 	if err != nil {
-		return 0, err
+		return swept, err
 	}
 	hashes, err := store.ListHashes()
 	if err != nil {
-		return 0, err
+		return swept, err
 	}
 
-	removed := 0
 	for _, h := range hashes {
 		if referenced[h] {
 			continue
 		}
 		if store.Remove(h) == nil {
-			removed++
+			swept.Blobs++
 		}
 	}
-	return removed, nil
+	swept.Temps, err = store.GCTempFiles(tempFileGrace)
+	if err != nil {
+		return swept, err
+	}
+	return swept, nil
 }
 
 type Evictor struct {
@@ -108,12 +121,19 @@ func (e *Evictor) SetHooks(inUse func(id int64) bool, onEvict func(id int64)) {
 	e.onEvict = onEvict
 }
 
-func (e *Evictor) RunIfNeeded() (int, error) {
-	totalSize, err := e.db.TotalCacheSize()
-	if err != nil {
-		return 0, fmt.Errorf("check cache size: %w", err)
+func CacheBytes(db *DB, store *Store) int64 {
+	if store != nil {
+		return store.Bytes()
 	}
+	if db == nil {
+		return 0
+	}
+	n, _ := db.TotalCacheSize()
+	return n
+}
 
+func (e *Evictor) RunIfNeeded() (int, error) {
+	totalSize := CacheBytes(e.db, e.store)
 	if totalSize <= e.maxSize {
 		return 0, nil
 	}
@@ -152,7 +172,7 @@ func (e *Evictor) evict(currentSize int64) (int, error) {
 				e.onEvict(inode.ID)
 			}
 
-			currentSize -= inode.Size
+			currentSize = CacheBytes(e.db, e.store)
 			evicted++
 			progressed = true
 		}

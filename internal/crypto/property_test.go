@@ -267,6 +267,31 @@ func TestProperty_NameKeyChangesWithDifferentPrivate(t *testing.T) {
 	}
 }
 
+func TestPathTokenOptionJSON_LegacyOnlyForAffected(t *testing.T) {
+	_, sk := mustGenKeyPair(t)
+	nameKey, err := DeriveNameKey(sk)
+	if err != nil {
+		t.Fatalf("DeriveNameKey: %v", err)
+	}
+
+	for _, affected := range []string{"İstanbul/dosya.txt", "ΟΔΥΣΣΕΑΣ/f.txt"} {
+		canonical, legacy := PathTokenOptionJSON(nameKey, []string{affected})
+		if canonical == "" {
+			t.Errorf("canonical empty for affected path %q", affected)
+		}
+		if legacy == "" {
+			t.Errorf("legacy empty for affected path %q", affected)
+		}
+	}
+
+	if _, legacy := PathTokenOptionJSON(nameKey, []string{"Documents/Report.PDF"}); legacy != "" {
+		t.Errorf("legacy non-empty for non-affected path: %s", legacy)
+	}
+	if c, l := PathTokenOptionJSON(nameKey, nil); c != "" || l != "" {
+		t.Errorf("expected empty maps for no paths, got %q / %q", c, l)
+	}
+}
+
 func TestProperty_SealDisplayNameRoundTrip(t *testing.T) {
 	pk, sk := mustGenKeyPair(t)
 	cases := []string{

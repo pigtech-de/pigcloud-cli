@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"context"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
 	"strings"
 
@@ -34,9 +32,7 @@ func init() {
 }
 
 func runCopy(source, target string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedSource := cmdutil.ResolvePath(source)
@@ -61,27 +57,10 @@ func runCopy(source, target string) {
 		options["dry-run"] = "true"
 	}
 
-	fullPath, baseName := cmdutil.ResolveAndBaseName(effectiveTarget)
-	cmdutil.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
+	fullPath, baseName := e2ee.ResolveAndBaseName(effectiveTarget)
+	e2ee.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
 
-	if cmdutil.HasE2EEKeys() {
-		var paths []string
-		srcTrimmed := strings.TrimPrefix(resolvedSource, "/")
-		tgtTrimmed := strings.TrimPrefix(effectiveTarget, "/")
-		if srcTrimmed != "" {
-			paths = append(paths, srcTrimmed)
-			if parent := filepath.Dir(srcTrimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		if tgtTrimmed != "" {
-			paths = append(paths, tgtTrimmed)
-			if parent := filepath.Dir(tgtTrimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensForAll(options, []string{resolvedSource, effectiveTarget}, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.CopyPayload](ctx, "cp", options, ExitWithError)
 

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"pigcloud/internal/fsutil"
 	"runtime"
 
 	"github.com/zalando/go-keyring"
@@ -14,15 +15,19 @@ import (
 
 const keyringService = "pigcloud-cli"
 
-func keyringUser() string {
-	if cfg == nil {
-		return "default"
-	}
-	u, err := url.Parse(cfg.Endpoint)
+func keyringUserFor(endpoint string) string {
+	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
 		return "default"
 	}
 	return u.Host
+}
+
+func keyringUser() string {
+	if cfg == nil {
+		return "default"
+	}
+	return keyringUserFor(cfg.Endpoint)
 }
 
 func keyringSet(apiKey string) bool {
@@ -116,7 +121,11 @@ var (
 	configFile string
 )
 
-const DefaultEndpoint = "https://pigtech.de/cloud/actions.php"
+const (
+	DefaultDomain   = "pigcloud.de"
+	DefaultBaseURL  = "https://" + DefaultDomain
+	DefaultEndpoint = DefaultBaseURL + "/cloud/actions.php"
+)
 
 func Load() {
 	cfg = &Config{
@@ -146,6 +155,7 @@ func Load() {
 }
 
 func Save() error {
+	current := Get()
 	path := getConfigPath()
 
 	dir := filepath.Dir(path)
@@ -153,9 +163,9 @@ func Save() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	keychainOk := keyringSet(cfg.APIKey)
+	keychainOk := keyringSet(current.APIKey)
 
-	persist := *cfg
+	persist := *current
 	if keychainOk {
 		persist.APIKey = ""
 	}
@@ -164,7 +174,7 @@ func Save() error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := fsutil.WriteFileAtomic(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -226,8 +236,24 @@ func GetEndpoint() string {
 }
 
 func SetEndpoint(endpoint string) error {
-	Get().Endpoint = endpoint
-	return Save()
+	current := Get()
+	if keyringUserFor(current.Endpoint) == keyringUserFor(endpoint) {
+		current.Endpoint = endpoint
+		return Save()
+	}
+
+	deviceKey, hadDeviceKey := keyringGetDeviceKey()
+	keyringDelete()
+	keyringDeleteDeviceKey()
+
+	current.Endpoint = endpoint
+	if err := Save(); err != nil {
+		return err
+	}
+	if hadDeviceKey {
+		keyringSetDeviceKey(deviceKey)
+	}
+	return nil
 }
 
 func GetLanguage() string {

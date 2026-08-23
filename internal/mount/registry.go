@@ -6,18 +6,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pigcloud/internal/fsutil"
 	"sort"
 )
 
 const mountsDirName = "mounts.d"
 
 func mountsDir() string {
-	return filepath.Join(configDir(), mountsDirName)
+	return filepath.Join(ConfigDir(), mountsDirName)
+}
+
+func mountKey(owner, remotePath string) string {
+	sum := sha256.Sum256([]byte(owner + "|" + NormalizeRemotePath(remotePath)))
+	return hex.EncodeToString(sum[:6])
 }
 
 func entryFileName(owner, remotePath string) string {
-	sum := sha256.Sum256([]byte(owner + "|" + NormalizeRemotePath(remotePath)))
-	return hex.EncodeToString(sum[:6]) + ".json"
+	return mountKey(owner, remotePath) + ".json"
 }
 
 func WriteMountEntry(info *MountInfo) error {
@@ -30,7 +35,7 @@ func WriteMountEntry(info *MountInfo) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := fsutil.WriteFileAtomic(path, data, 0600); err != nil {
 		return err
 	}
 	info.Source = path
@@ -101,4 +106,8 @@ func IsMountReachable(info *MountInfo) bool {
 	}
 	resp, err := SendRequestNoEvict(info, "ping")
 	return err == nil && resp != nil && resp.OK
+}
+
+func MountLogPath(owner, remotePath string) string {
+	return filepath.Join(ConfigDir(), "mount-"+mountKey(owner, remotePath)+".log")
 }

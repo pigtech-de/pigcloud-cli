@@ -1,10 +1,15 @@
 package cache
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	gosync "sync"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDBOpenAndMigrate(t *testing.T) {
@@ -200,6 +205,47 @@ func TestUpsertPreservesPinAndAccess(t *testing.T) {
 	}
 }
 
+func TestSetInodeSize(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	id, _ := db.UpsertInode(&Inode{RemotePath: "legacy.dat", DisplayName: "legacy.dat", Size: 0, SyncStatus: StatusSynced})
+	if err := db.SetInodeSize(id, 4096); err != nil {
+		t.Fatalf("SetInodeSize: %v", err)
+	}
+	got, _ := db.GetInode(id)
+	if got == nil || got.Size != 4096 {
+		t.Fatalf("size = %v, want 4096 persisted", got)
+	}
+}
+
+func TestUpsertPreservesDirtyFlag(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	id, _ := db.UpsertInode(&Inode{RemotePath: "e.txt", DisplayName: "e.txt", Size: 10, Dirty: true, SyncStatus: StatusPending})
+
+	db.UpsertInode(&Inode{RemotePath: "e.txt", DisplayName: "e.txt", Size: 10, Dirty: false, SyncStatus: StatusSynced})
+
+	got, _ := db.GetInode(id)
+	if got == nil || !got.Dirty {
+		t.Fatalf("dirty = %v, want true (persisted pending edit survived the rebuild)", got)
+	}
+
+	db.MarkSynced(id, "")
+	if got, _ := db.GetInode(id); got.Dirty {
+		t.Error("MarkSynced did not clear dirty")
+	}
+}
+
 func TestStoreConcurrentPutSameContent(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)
@@ -213,7 +259,7 @@ func TestStoreConcurrentPutSameContent(t *testing.T) {
 		data[i] = byte(i * 7)
 	}
 
-	var wg gosync.WaitGroup
+	var wg sync.WaitGroup
 	hashes := make([]string, 16)
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
@@ -240,6 +286,138 @@ func TestStoreConcurrentPutSameContent(t *testing.T) {
 	}
 	if len(got) != len(data) {
 		t.Fatalf("blob corrupted: got %d bytes, want %d", len(got), len(data))
+	}
+}
+
+type boundedWriter struct {
+	t   *testing.T
+	w   io.Writer
+	max int
+	tag string
+}
+
+func (b *boundedWriter) Write(p []byte) (int, error) {
+	if len(p) > b.max {
+		b.t.Fatalf("%s wrote %d bytes in one Write, over the %d bound (whole-file buffer?)", b.tag, len(p), b.max)
+	}
+	return b.w.Write(p)
+}
+
+type boundedReader struct {
+	t   *testing.T
+	r   io.Reader
+	max int
+	tag string
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if len(p) > b.max {
+		b.t.Fatalf("%s read into a %d-byte buffer, over the %d bound (whole-file buffer?)", b.tag, len(p), b.max)
+	}
+	return b.r.Read(p)
+}
+
+func TestStoreWriteToStreamsWholeBlob(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	sizes := []int{0, 1, cacheChunkSize - 1, cacheChunkSize, cacheChunkSize + 1, 3*cacheChunkSize + 123}
+	for _, size := range sizes {
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(i*31 + 7)
+		}
+		hash, err := store.Put(data)
+		if err != nil {
+			t.Fatalf("Put(%d): %v", size, err)
+		}
+
+		var buf bytes.Buffer
+		bw := &boundedWriter{t: t, w: &buf, max: cacheChunkSize, tag: "WriteTo"}
+		n, err := store.WriteTo(hash, bw)
+		if err != nil {
+			t.Fatalf("WriteTo(%d): %v", size, err)
+		}
+		if n != int64(size) {
+			t.Errorf("WriteTo(%d) reported %d bytes", size, n)
+		}
+		if !bytes.Equal(buf.Bytes(), data) {
+			t.Errorf("WriteTo(%d) content mismatch", size)
+		}
+		if got, _ := store.Get(hash); !bytes.Equal(buf.Bytes(), got) {
+			t.Errorf("WriteTo(%d) diverges from Get", size)
+		}
+	}
+}
+
+func TestStoreSealStreamIsChunkBounded(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	data := make([]byte, 3*cacheChunkSize+123)
+	for i := range data {
+		data[i] = byte(i*13 + 5)
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+
+	br := &boundedReader{t: t, r: bytes.NewReader(data), max: cacheChunkSize, tag: "sealStream ingest"}
+	var out bytes.Buffer
+	bw := &boundedWriter{t: t, w: &out, max: cacheChunkSize + 128, tag: "sealStream output"}
+	n, err := store.sealStream(br, hash, bw)
+	if err != nil {
+		t.Fatalf("sealStream: %v", err)
+	}
+	if n != int64(len(data)) {
+		t.Errorf("sealStream sealed %d bytes, want %d", n, len(data))
+	}
+}
+
+func TestStorePutFileMatchesPut(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	srcDir := t.TempDir()
+	sizes := []int{0, 1, cacheChunkSize - 1, cacheChunkSize, cacheChunkSize + 1, 3*cacheChunkSize + 77}
+	for _, size := range sizes {
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(i*17 + 3)
+		}
+		src := filepath.Join(srcDir, fmt.Sprintf("f-%d.bin", size))
+		if err := os.WriteFile(src, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		fileHash, err := store.PutFile(src)
+		if err != nil {
+			t.Fatalf("PutFile(%d): %v", size, err)
+		}
+		memHash, err := store.Put(data)
+		if err != nil {
+			t.Fatalf("Put(%d): %v", size, err)
+		}
+		if fileHash != memHash {
+			t.Errorf("size %d: PutFile hash %s != Put hash %s", size, fileHash, memHash)
+		}
+		got, err := store.Get(fileHash)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", size, err)
+		}
+		if !bytes.Equal(got, data) {
+			t.Errorf("size %d: PutFile blob does not round-trip", size)
+		}
 	}
 }
 
@@ -511,7 +689,7 @@ func TestEviction(t *testing.T) {
 	evictor := NewEvictor(db, store, 500)
 
 	for i, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		data := make([]byte, 200)
+		data := bytes.Repeat([]byte{byte('a' + i)}, 200)
 		hash, _ := store.Put(data)
 		inode := &Inode{
 			RemotePath:  name,
@@ -593,12 +771,15 @@ func TestGCOrphans(t *testing.T) {
 
 	orphan, _ := store.Put([]byte("orphan content nobody references"))
 
-	removed, err := GCOrphans(db, store)
+	swept, err := GCOrphans(db, store)
 	if err != nil {
 		t.Fatalf("GCOrphans: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("removed %d, want 1", removed)
+	if swept.Blobs != 1 {
+		t.Fatalf("removed %d blobs, want 1", swept.Blobs)
+	}
+	if swept.Temps != 0 {
+		t.Fatalf("removed %d temp files with none seeded, want 0", swept.Temps)
 	}
 	if !store.Has(keep) {
 		t.Fatal("referenced blob was removed")
@@ -657,5 +838,213 @@ func TestParseCacheSize(t *testing.T) {
 		if _, err := ParseCacheSize(bad); err == nil {
 			t.Errorf("ParseCacheSize(%q): expected error, got nil", bad)
 		}
+	}
+}
+
+func diskBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+	var total int64
+	err := filepath.WalkDir(filepath.Join(dir, "store"), func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || isTempName(d.Name()) {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk store: %v", err)
+	}
+	return total
+}
+
+func TestCacheBytesMeasuresDiskNotInodeSizes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	shared := bytes.Repeat([]byte("s"), 3<<20)
+	sharedHash, err := store.Put(shared)
+	if err != nil {
+		t.Fatalf("put shared: %v", err)
+	}
+	for _, name := range []string{"one.bin", "copy-of-one.bin"} {
+		if _, err := db.UpsertInode(&Inode{
+			RemotePath: name, DisplayName: name, Size: int64(len(shared)),
+			Cached: true, ContentHash: sharedHash, SyncStatus: StatusSynced,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", name, err)
+		}
+	}
+
+	orphanHash, err := store.Put(bytes.Repeat([]byte("o"), 1<<20))
+	if err != nil {
+		t.Fatalf("put orphan: %v", err)
+	}
+
+	if got, want := CacheBytes(db, store), diskBytes(t, dir); got != want {
+		t.Errorf("CacheBytes = %d, on disk = %d", got, want)
+	}
+	byInode, _ := db.TotalCacheSize()
+	if byInode == CacheBytes(db, store) {
+		t.Fatal("fixture does not separate inode sizes from disk bytes")
+	}
+
+	before := CacheBytes(db, store)
+	if _, err := store.Put(shared); err != nil {
+		t.Fatalf("re-put shared: %v", err)
+	}
+	if got := CacheBytes(db, store); got != before {
+		t.Errorf("re-putting stored content moved the total from %d to %d", before, got)
+	}
+
+	if err := store.Remove(orphanHash); err != nil {
+		t.Fatalf("remove orphan: %v", err)
+	}
+	if got, want := CacheBytes(db, store), diskBytes(t, dir); got != want {
+		t.Errorf("after a removal CacheBytes = %d, on disk = %d", got, want)
+	}
+
+	reopened, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	if got, want := reopened.Bytes(), diskBytes(t, dir); got != want {
+		t.Errorf("reopened store Bytes = %d, on disk = %d", got, want)
+	}
+}
+
+func TestCacheBytesSurvivesConcurrentPutsAndRemoves(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	const rounds = 60
+	var wg sync.WaitGroup
+	hashes := make([]string, rounds)
+	for i := 0; i < rounds; i++ {
+		content := bytes.Repeat([]byte{byte(i)}, 4096+i)
+		h, err := store.Put(content)
+		if err != nil {
+			t.Fatalf("seed put %d: %v", i, err)
+		}
+		hashes[i] = h
+	}
+
+	start := make(chan struct{})
+	for i := 0; i < rounds; i++ {
+		content := bytes.Repeat([]byte{byte(i)}, 4096+i)
+		h := hashes[i]
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			for n := 0; n < 20; n++ {
+				store.Put(content)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for n := 0; n < 20; n++ {
+				store.Remove(h)
+			}
+		}()
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			for n := 0; n < 20; n++ {
+				fresh := bytes.Repeat([]byte{byte(i), byte(n)}, 512+n)
+				store.Put(fresh)
+				if n%3 == 0 {
+					store.Remove(fmt.Sprintf("%x", sha256.Sum256(fresh)))
+				}
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got, want := store.Bytes(), diskBytes(t, dir); got != want {
+		t.Errorf("counter = %d after concurrent rounds, on disk = %d (drift %+d)", got, want, got-want)
+	}
+}
+
+func TestRemoveTakesTheStoreLock(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	content := bytes.Repeat([]byte("p"), 8192)
+	hash, err := store.Put(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	removed := make(chan struct{})
+	go func() {
+		store.Remove(hash)
+		close(removed)
+	}()
+
+	select {
+	case <-removed:
+		store.mu.Unlock()
+		t.Fatal("Remove completed while the store lock was held: its stat-then-delete can straddle a concurrent commit")
+	case <-time.After(200 * time.Millisecond):
+	}
+	store.mu.Unlock()
+
+	select {
+	case <-removed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Remove never completed after the lock was released")
+	}
+
+	if got, want := store.Bytes(), diskBytes(t, dir); got != want {
+		t.Errorf("counter = %d, on disk = %d", got, want)
+	}
+}
+
+func TestBytesResyncsRatherThanClampingCorruption(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.Put(bytes.Repeat([]byte("x"), 12000)); err != nil {
+		t.Fatal(err)
+	}
+	real := diskBytes(t, dir)
+	if real == 0 {
+		t.Fatal("fixture stored nothing")
+	}
+
+	store.bytes.Store(-1)
+	if got := store.Bytes(); got != real {
+		t.Errorf("Bytes() = %d with a corrupt counter, want a resync to %d", got, real)
+	}
+	if got := store.bytes.Load(); got != real {
+		t.Errorf("the corrupt counter was not repaired: %d", got)
 	}
 }

@@ -2,9 +2,12 @@ package agent
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +15,10 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"pigcloud/internal/crypto"
+	"pigcloud/internal/fsutil"
+	"pigcloud/internal/netutil"
 )
 
 type AgentInfo struct {
@@ -86,7 +93,7 @@ func writeAgentFile(info *AgentInfo) error {
 	}
 	path := agentFilePath()
 	os.MkdirAll(filepath.Dir(path), 0700)
-	return os.WriteFile(path, data, 0600)
+	return fsutil.WriteFileAtomic(path, data, 0600)
 }
 
 func ReadAgentFile() *AgentInfo {
@@ -96,6 +103,9 @@ func ReadAgentFile() *AgentInfo {
 	}
 	var info AgentInfo
 	if json.Unmarshal(data, &info) != nil {
+		return nil
+	}
+	if info.Port == 0 || info.Token == "" {
 		return nil
 	}
 	if !info.Expires.IsZero() && time.Now().After(info.Expires) {
@@ -110,14 +120,18 @@ func RemoveAgentFile() {
 }
 
 func Serve(keys *KeyMaterial, ttl time.Duration) (port int, token string, err error) {
-	token, err = generateToken()
-	if err != nil {
-		return 0, "", fmt.Errorf("generate token: %w", err)
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", netutil.LoopbackAny)
 	if err != nil {
 		return 0, "", fmt.Errorf("listen: %w", err)
+	}
+	return serveListener(listener, keys, ttl)
+}
+
+func serveListener(listener net.Listener, keys *KeyMaterial, ttl time.Duration) (port int, token string, err error) {
+	token, err = generateToken()
+	if err != nil {
+		listener.Close()
+		return 0, "", fmt.Errorf("generate token: %w", err)
 	}
 	port = listener.Addr().(*net.TCPAddr).Port
 
@@ -134,46 +148,102 @@ func Serve(keys *KeyMaterial, ttl time.Duration) (port int, token string, err er
 		return 0, "", fmt.Errorf("write agent file: %w", err)
 	}
 
+	guard := newKeyGuard(keys)
+
 	var shutdownOnce sync.Once
-	shutdown := func() {
+	shutdown := func(reason string) {
 		shutdownOnce.Do(func() {
-			for i := range keys.PrivateKey {
-				keys.PrivateKey[i] = 0
-			}
-			for i := range keys.KyberSeed {
-				keys.KyberSeed[i] = 0
-			}
-			for i := range keys.NameKey {
-				keys.NameKey[i] = 0
-			}
-			for i := range keys.SigningPrivateKeyEd25519 {
-				keys.SigningPrivateKeyEd25519[i] = 0
-			}
-			for i := range keys.SigningPrivateKeyMldsa {
-				keys.SigningPrivateKeyMldsa[i] = 0
-			}
+			log.Printf("%s: %s", wipeLogPrefix, reason)
 			listener.Close()
 			RemoveAgentFile()
+			guard.wipe()
 		})
 	}
 
 	timer := time.AfterFunc(ttl, func() {
-		shutdown()
+		shutdown(fmt.Sprintf("ttl %s elapsed", ttl))
 	})
 
+	var backoff netutil.AcceptBackoff
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			break
+			if errors.Is(err, net.ErrClosed) {
+				break
+			}
+			d := backoff.Next()
+			log.Printf("agent: accept failed, retrying in %v: %v", d, err)
+			time.Sleep(d)
+			continue
 		}
-		go handleConn(conn, keys, token, timer, shutdown)
+		backoff.Reset()
+		go handleConn(conn, guard, token, timer, shutdown)
 	}
 
-	shutdown()
+	shutdown("listener closed")
 	return port, token, nil
 }
 
-func handleConn(conn net.Conn, keys *KeyMaterial, token string, timer *time.Timer, shutdown func()) {
+const wipeLogPrefix = "agent: wiping keys and stopping"
+
+type keyGuard struct {
+	mu   sync.Mutex
+	keys *KeyMaterial
+}
+
+func newKeyGuard(keys *KeyMaterial) *keyGuard {
+	return &keyGuard{keys: keys}
+}
+
+func (g *keyGuard) response() (Response, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	k := g.keys
+	if k == nil {
+		return Response{}, false
+	}
+	return Response{
+		OK:                       true,
+		PublicKey:                hex.EncodeToString(k.PublicKey[:]),
+		PrivateKey:               hex.EncodeToString(k.PrivateKey[:]),
+		KyberPublicKey:           hex.EncodeToString(k.KyberPublicKey),
+		KyberSeed:                hex.EncodeToString(k.KyberSeed),
+		NameKey:                  hex.EncodeToString(k.NameKey),
+		SigningPublicKeyEd25519:  hex.EncodeToString(k.SigningPublicKeyEd25519),
+		SigningPrivateKeyEd25519: hex.EncodeToString(k.SigningPrivateKeyEd25519),
+		SigningPublicKeyMldsa:    hex.EncodeToString(k.SigningPublicKeyMldsa),
+		SigningPrivateKeyMldsa:   hex.EncodeToString(k.SigningPrivateKeyMldsa),
+	}, true
+}
+
+func (g *keyGuard) wipe() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	k := g.keys
+	if k == nil {
+		return
+	}
+	for i := range k.PrivateKey {
+		k.PrivateKey[i] = 0
+	}
+	for i := range k.KyberSeed {
+		k.KyberSeed[i] = 0
+	}
+	for i := range k.NameKey {
+		k.NameKey[i] = 0
+	}
+	for i := range k.SigningPrivateKeyEd25519 {
+		k.SigningPrivateKeyEd25519[i] = 0
+	}
+	for i := range k.SigningPrivateKeyMldsa {
+		k.SigningPrivateKeyMldsa[i] = 0
+	}
+	g.keys = nil
+}
+
+func handleConn(conn net.Conn, guard *keyGuard, token string, timer *time.Timer, shutdown func(string)) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
@@ -186,7 +256,7 @@ func handleConn(conn net.Conn, keys *KeyMaterial, token string, timer *time.Time
 		return
 	}
 
-	if req.Token != token {
+	if subtle.ConstantTimeCompare([]byte(req.Token), []byte(token)) != 1 {
 		enc.Encode(Response{Error: "unauthorized"})
 		return
 	}
@@ -196,25 +266,19 @@ func handleConn(conn net.Conn, keys *KeyMaterial, token string, timer *time.Time
 		enc.Encode(Response{OK: true})
 
 	case "keys":
-		enc.Encode(Response{
-			OK:                       true,
-			PublicKey:                hex.EncodeToString(keys.PublicKey[:]),
-			PrivateKey:               hex.EncodeToString(keys.PrivateKey[:]),
-			KyberPublicKey:           hex.EncodeToString(keys.KyberPublicKey),
-			KyberSeed:                hex.EncodeToString(keys.KyberSeed),
-			NameKey:                  hex.EncodeToString(keys.NameKey),
-			SigningPublicKeyEd25519:  hex.EncodeToString(keys.SigningPublicKeyEd25519),
-			SigningPrivateKeyEd25519: hex.EncodeToString(keys.SigningPrivateKeyEd25519),
-			SigningPublicKeyMldsa:    hex.EncodeToString(keys.SigningPublicKeyMldsa),
-			SigningPrivateKeyMldsa:   hex.EncodeToString(keys.SigningPrivateKeyMldsa),
-		})
+		resp, ok := guard.response()
+		if !ok {
+			enc.Encode(Response{Error: "agent expired"})
+			return
+		}
+		enc.Encode(resp)
 
 	case "shutdown":
 		enc.Encode(Response{OK: true})
 		timer.Stop()
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			shutdown()
+			shutdown("shutdown requested")
 		}()
 
 	default:
@@ -233,31 +297,19 @@ func RequestKeys() *KeyMaterial {
 		return nil
 	}
 
-	pubBytes, err := hex.DecodeString(resp.PublicKey)
-	if err != nil || len(pubBytes) != 32 {
-		return nil
-	}
-	privBytes, err := hex.DecodeString(resp.PrivateKey)
-	if err != nil || len(privBytes) != 32 {
-		return nil
-	}
-	kyberPubBytes, err := hex.DecodeString(resp.KyberPublicKey)
-	if err != nil || len(kyberPubBytes) != 1184 {
-		return nil
-	}
-	kyberSeedBytes, err := hex.DecodeString(resp.KyberSeed)
-	if err != nil || len(kyberSeedBytes) != 64 {
-		return nil
-	}
-	nameBytes, err := hex.DecodeString(resp.NameKey)
-	if err != nil {
+	pubBytes := crypto.DecodeHexKey(resp.PublicKey, crypto.X25519KeySize)
+	privBytes := crypto.DecodeHexKey(resp.PrivateKey, crypto.X25519KeySize)
+	kyberPubBytes := crypto.DecodeHexKey(resp.KyberPublicKey, crypto.KyberPublicKeySize)
+	kyberSeedBytes := crypto.DecodeHexKey(resp.KyberSeed, crypto.KyberSeedSize)
+	nameBytes := crypto.DecodeHexKey(resp.NameKey, crypto.NameKeySize)
+	if pubBytes == nil || privBytes == nil || kyberPubBytes == nil || kyberSeedBytes == nil || nameBytes == nil {
 		return nil
 	}
 
-	signingPubEd := decodeAgentField(resp.SigningPublicKeyEd25519, 32)
-	signingPrivEd := decodeAgentField(resp.SigningPrivateKeyEd25519, 64)
-	signingPubMl := decodeAgentField(resp.SigningPublicKeyMldsa, 1312)
-	signingPrivMl := decodeAgentField(resp.SigningPrivateKeyMldsa, 2560)
+	signingPubEd := crypto.DecodeHexKey(resp.SigningPublicKeyEd25519, crypto.Ed25519PKSize)
+	signingPrivEd := crypto.DecodeHexKey(resp.SigningPrivateKeyEd25519, crypto.Ed25519SKSize)
+	signingPubMl := crypto.DecodeHexKey(resp.SigningPublicKeyMldsa, crypto.Mldsa44PKSize)
+	signingPrivMl := crypto.DecodeHexKey(resp.SigningPrivateKeyMldsa, crypto.Mldsa44SKSize)
 
 	var pub, priv [32]byte
 	copy(pub[:], pubBytes)
@@ -273,17 +325,6 @@ func RequestKeys() *KeyMaterial {
 		SigningPublicKeyMldsa:    signingPubMl,
 		SigningPrivateKeyMldsa:   signingPrivMl,
 	}
-}
-
-func decodeAgentField(hexStr string, expectedLen int) []byte {
-	if hexStr == "" {
-		return nil
-	}
-	b, err := hex.DecodeString(hexStr)
-	if err != nil || len(b) != expectedLen {
-		return nil
-	}
-	return b
 }
 
 func Ping() bool {
@@ -310,7 +351,7 @@ func IsRunning() bool {
 }
 
 func sendRequest(info *AgentInfo, action string) (*Response, error) {
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(info.Port), 2*time.Second)
+	conn, err := net.DialTimeout("tcp", netutil.LoopbackHost+":"+strconv.Itoa(info.Port), netutil.LoopbackDialTimeout)
 	if err != nil {
 		RemoveAgentFile()
 		return nil, err

@@ -3,25 +3,24 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/filetypes"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -89,18 +88,16 @@ func init() {
 }
 
 func runGrepIndex(pattern string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	queryTokens := tokenizeGrQuery(pattern)
 	if len(queryTokens) == 0 {
-		output.PrintError("No searchable tokens in pattern (need 2+ chars, alphanumeric)")
+		output.PrintError(fmt.Sprintf("No searchable tokens in pattern (need %d+ chars, alphanumeric)", grMinTokenRunes))
 		ExitWithError()
 	}
 
-	if !cmdutil.EnsureNamesReadable() {
+	if !e2ee.EnsureNamesReadable() {
 		return
 	}
 
@@ -149,6 +146,8 @@ func runGrepIndex(pattern string) {
 	}
 }
 
+const grMinTokenRunes = 2
+
 func tokenizeGrQuery(raw string) []string {
 	out := []string{}
 	seen := map[string]struct{}{}
@@ -156,7 +155,7 @@ func tokenizeGrQuery(raw string) []string {
 	flush := func() {
 		s := strings.ToLower(cur.String())
 		cur.Reset()
-		if len(s) < 2 {
+		if utf8.RuneCountInString(s) < grMinTokenRunes {
 			return
 		}
 		if _, ok := seen[s]; ok {
@@ -194,30 +193,14 @@ func unsealGrItem(sealedB64 string) (*grIndexContent, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, priv := cmdutil.GetKeyPair(ExitWithError)
+	_, priv := e2ee.GetKeyPair(ExitWithError)
 	framed, err := crypto.HybridUnseal(sealed, priv)
 	if err != nil {
 		return nil, err
 	}
-	if len(framed) == 0 {
-		return nil, fmt.Errorf("empty framed payload")
-	}
-	var bodyBytes []byte
-	switch framed[0] {
-	case 1:
-		bodyBytes = framed[1:]
-	case 2:
-		gz, err := gzip.NewReader(bytes.NewReader(framed[1:]))
-		if err != nil {
-			return nil, err
-		}
-		defer gz.Close()
-		bodyBytes, err = io.ReadAll(gz)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unknown frame version 0x%x", framed[0])
+	bodyBytes, err := crypto.UnframeIndexBody(framed)
+	if err != nil {
+		return nil, err
 	}
 	var payload grIndexContent
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
@@ -234,7 +217,7 @@ func decryptGrName(sealedNameB64 string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, priv := cmdutil.GetKeyPair(ExitWithError)
+	_, priv := e2ee.GetKeyPair(ExitWithError)
 	return crypto.UnsealDisplayName(sealed, priv)
 }
 
@@ -283,12 +266,10 @@ func printGrIndexHit(name string, snippets []string) {
 }
 
 func runGrepFileScan(pattern, searchPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
-	if !cmdutil.EnsureNamesReadable() {
+	if !e2ee.EnsureNamesReadable() {
 		return
 	}
 
@@ -315,14 +296,7 @@ func runGrepFileScan(pattern, searchPath string) {
 			"source": resolvedPath,
 			"depth":  "50",
 		}
-		if cmdutil.HasE2EEKeys() {
-			trimmed := strings.TrimPrefix(resolvedPath, "/")
-			var paths []string
-			if trimmed != "" {
-				paths = append(paths, trimmed)
-			}
-			cmdutil.AddPathTokens(treeOpts, paths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(treeOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 		_, tree := cmdutil.ExecuteCommand[api.TreePayload](ctx, "tr", treeOpts, ExitWithError)
 		decryptTreeEntries(tree.Entries)
 
@@ -349,20 +323,13 @@ func runGrepFileScan(pattern, searchPath string) {
 		collect(tree.Entries, "")
 	} else {
 		lsOpts := map[string]string{"source": resolvedPath}
-		if cmdutil.HasE2EEKeys() {
-			trimmed := strings.TrimPrefix(resolvedPath, "/")
-			var paths []string
-			if trimmed != "" {
-				paths = append(paths, trimmed)
-			}
-			cmdutil.AddPathTokens(lsOpts, paths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(lsOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 		_, listing := cmdutil.ExecuteCommand[api.ListPayload](ctx, "ls", lsOpts, ExitWithError)
 
 		for i := range listing.Entries {
 			item := &listing.Entries[i]
 			if item.E2EEDisplayName != "" {
-				item.Name = cmdutil.DecryptE2EEName(item.E2EEDisplayName)
+				item.Name = e2ee.DecryptE2EEName(item.E2EEDisplayName)
 			}
 			if item.Type != "directory" && isGrepTarget(item.Name) {
 				remotePath := resolvedPath
@@ -395,33 +362,21 @@ func runGrepFileScan(pattern, searchPath string) {
 		}
 
 		perFileOpts := map[string]string{}
-		if cmdutil.HasE2EEKeys() {
-			fileTrimmed := strings.TrimPrefix(f.remotePath, "/")
-			var filePaths []string
-			if fileTrimmed != "" {
-				filePaths = append(filePaths, fileTrimmed)
-				for p := filepath.Dir(fileTrimmed); p != "." && p != ""; p = filepath.Dir(p) {
-					filePaths = append(filePaths, p)
-				}
-			}
-			cmdutil.AddPathTokens(perFileOpts, filePaths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(perFileOpts, f.remotePath, e2ee.SelfAndAncestors, ExitWithError)
 
 		data, dlResult, err := client.DownloadToMemory(ctx, f.remotePath, perFileOpts)
 		if err != nil {
 			continue
 		}
-		if dlResult != nil && dlResult.E2EE {
-			if err := cmdutil.VerifyDownloadIntegrity(bytes.NewReader(data), dlResult); err != nil {
-				if !GetQuietOutput() {
-					fmt.Fprintf(os.Stderr, "skip %s: %v\n", f.name, err)
-				}
-				continue
+		if err := gateAndVerify(data, dlResult); err != nil {
+			if !GetQuietOutput() {
+				fmt.Fprintf(os.Stderr, "skip %s: %v\n", f.name, err)
 			}
-			data = decryptToBytes(data, dlResult)
-			if data == nil {
-				continue
-			}
+			continue
+		}
+		data = decryptToBytes(data, dlResult)
+		if data == nil {
+			continue
 		}
 
 		matches := grepBytes(data, matcher)
@@ -474,8 +429,15 @@ func grepBytes(data []byte, m *cmdutil.Matcher) []grepMatch {
 	return matches
 }
 
+func gateAndVerify(data []byte, dlResult *api.DownloadResult) error {
+	if err := e2ee.RequireEncryptedDownload(dlResult); err != nil {
+		return err
+	}
+	return e2ee.VerifyDownloadIntegrity(bytes.NewReader(data), dlResult)
+}
+
 func decryptToBytes(ciphertext []byte, dlResult *api.DownloadResult) []byte {
-	_, privKey := cmdutil.GetKeyPair(ExitWithError)
+	_, privKey := e2ee.GetKeyPair(ExitWithError)
 	sealedKeyBytes, err := base64.StdEncoding.DecodeString(dlResult.SealedKey)
 	if err != nil {
 		return nil

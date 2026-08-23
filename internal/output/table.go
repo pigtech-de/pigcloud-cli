@@ -10,6 +10,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 )
 
 var jsonErrors bool
@@ -23,17 +24,22 @@ func Table(headers []string) *tablewriter.Table {
 }
 
 func TableTo(w io.Writer, headers []string) *tablewriter.Table {
-	table := tablewriter.NewWriter(w)
-	table.SetHeader(headers)
-	table.SetBorder(false)
-	table.SetHeaderLine(false)
-	table.SetColumnSeparator("")
-	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-	table.SetAlignment(tablewriter.ALIGN_LEFT)
-	table.SetTablePadding("  ")
-	table.SetNoWhiteSpace(true)
-	table.SetAutoWrapText(false)
-	return table
+	cell := tw.CellConfig{
+		Formatting: tw.CellFormatting{AutoWrap: tw.WrapNone, AutoFormat: tw.Off},
+		Alignment:  tw.CellAlignment{Global: tw.AlignLeft},
+		Padding:    tw.CellPadding{Global: tw.Padding{Right: "  ", Overwrite: true}},
+	}
+	return tablewriter.NewTable(w,
+		tablewriter.WithHeader(headers),
+		tablewriter.WithRendition(tw.Rendition{
+			Borders: tw.Border{Left: tw.Off, Right: tw.Off, Top: tw.Off, Bottom: tw.Off},
+			Settings: tw.Settings{
+				Separators: tw.Separators{ShowHeader: tw.Off, ShowFooter: tw.Off, BetweenRows: tw.Off, BetweenColumns: tw.Off},
+				Lines:      tw.Lines{ShowTop: tw.Off, ShowBottom: tw.Off, ShowHeaderLine: tw.Off, ShowFooterLine: tw.Off},
+			},
+		}),
+		tablewriter.WithConfig(tablewriter.Config{Header: cell, Row: cell}),
+	)
 }
 
 func FormatSize(bytes *int64) string {

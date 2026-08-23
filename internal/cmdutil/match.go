@@ -41,6 +41,9 @@ func CompileMatcher(pattern string, mode MatchMode, ignoreCase bool) (*Matcher, 
 		} else {
 			m.pattern = pattern
 		}
+		if _, err := filepath.Match(m.pattern, ""); err != nil {
+			return nil, err
+		}
 	case MatchFixed:
 		if ignoreCase {
 			m.pattern = strings.ToLower(pattern)
@@ -63,7 +66,7 @@ func (m *Matcher) MatchString(s string) bool {
 		}
 		matched, err := filepath.Match(m.pattern, target)
 		if err != nil {
-			return strings.Contains(target, m.pattern)
+			return false
 		}
 		return matched
 	case MatchFixed:

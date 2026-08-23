@@ -1,19 +1,16 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var inCmd = &cobra.Command{
@@ -40,29 +37,20 @@ func init() {
 }
 
 func runInfo(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
 	options := map[string]string{"source": resolvedPath}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
+	if e2ee.HasE2EEKeys() {
+		e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
+		addChildScope(ctx, options, resolvedPath)
 	}
 	resp, payload := cmdutil.ExecuteCommand[api.InfoPayload](ctx, "in", options, ExitWithError)
 	details := payload.Details
 
 	if details.E2EEDisplayName != "" {
-		details.Name = cmdutil.DecryptE2EEName(details.E2EEDisplayName)
+		details.Name = e2ee.DecryptE2EEName(details.E2EEDisplayName)
 	}
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), details) {

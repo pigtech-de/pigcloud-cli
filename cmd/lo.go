@@ -3,12 +3,14 @@ package cmd
 import (
 	"os"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
-	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/mount"
 	"pigcloud/internal/output"
+	"pigcloud/internal/tree"
+
+	"github.com/spf13/cobra"
 )
 
 var logoutCmd = &cobra.Command{
@@ -42,7 +44,8 @@ func runLogout() {
 	}
 
 	agent.Shutdown()
-	cmdutil.ClearCachedKey()
+	e2ee.ClearCachedKey()
+	tree.ClearCache()
 
 	if err := config.Clear(); err != nil {
 		output.PrintError("Failed to clear configuration: " + err.Error())

@@ -13,14 +13,17 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
 	"pigcloud/internal/crypto"
 	"pigcloud/internal/mount"
 	"pigcloud/internal/mount/cache"
+	"pigcloud/internal/mount/mlog"
+	"pigcloud/internal/mount/spawn"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 func currentOwnerID() string {
@@ -35,6 +38,7 @@ var (
 	mnCacheSize    string
 	mnPollInterval int
 	mnReadOnly     bool
+	mnLogLevel     string
 	mnVirtual      bool
 )
 
@@ -62,6 +66,7 @@ pc mn start                  # Sync root at default location
 pc mn stop                   # Unmount and stop sync
 pc mn files --tree           # Show synced files as a tree
 pc mn files --issues         # Show files with sync problems
+pc mn retry                  # Re-attempt transfers that gave up
 pc mn conflicts              # List files changed on both sides
 pc mn resolve <path> -k both # Settle a conflict, keeping both copies`,
 	Args: cobra.NoArgs,
@@ -173,6 +178,27 @@ var mnCleanCmd = &cobra.Command{
 	},
 }
 
+var mnRetryCmd = &cobra.Command{
+	Use:   "retry [remote-path]",
+	Short: "Re-attempt transfers that gave up",
+	Long: `Clear the give-up flag on files whose upload or download failed for good and
+try them again.
+
+Use it after fixing the cause: freeing quota, friending the collaborator whose
+upload landed in your folder, or waiting out a scanner outage. Without a path it
+retries every failed file in the mount; with one it retries that file only.`,
+	Example: `pc mn retry
+pc mn retry Docs/report.pdf`,
+	Args: cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		hint := ""
+		if len(args) == 1 {
+			hint = args[0]
+		}
+		runMountRetry(hint)
+	},
+}
+
 var mnConflictsCmd = &cobra.Command{
 	Use:   "conflicts [remote-path]",
 	Short: "List files changed both locally and remotely",
@@ -240,6 +266,7 @@ func init() {
 	mnStartCmd.Flags().IntVar(&mnPollInterval, "poll-interval", 30, "remote poll interval in seconds")
 	mnStartCmd.Flags().BoolVar(&mnReadOnly, "read-only", false, "mount read-only (no write-back)")
 	mnStartCmd.Flags().BoolVar(&mnVirtual, "virtual", false, "use virtual FUSE/WinFsp mount instead of sync mode")
+	mnStartCmd.Flags().StringVar(&mnLogLevel, "log-level", "", "daemon log detail: debug, info, warn, error (default info)")
 
 	mnFilesCmd.Flags().BoolVar(&mnFilesIssuesOnly, "issues", false, "show only files with problems")
 	mnFilesCmd.Flags().BoolVar(&mnFilesTree, "tree", false, "show files as a tree")
@@ -259,6 +286,7 @@ func init() {
 	mnCmd.AddCommand(mnFilesCmd)
 	mnCmd.AddCommand(mnPinCmd)
 	mnCmd.AddCommand(mnCleanCmd)
+	mnCmd.AddCommand(mnRetryCmd)
 	mnCmd.AddCommand(mnConflictsCmd)
 	mnCmd.AddCommand(mnResolveCmd)
 	mnCmd.AddCommand(mnMvCmd)
@@ -301,6 +329,26 @@ func printMountChoices(mounts []*mount.MountInfo) {
 	}
 }
 
+func withMount(hint string, fn func(info *mount.MountInfo)) {
+	info := selectMount(hint)
+	if info == nil {
+		output.PrintInfo("Not mounted")
+		return
+	}
+	fn(info)
+}
+
+func reportIPC(verb string, resp *mount.DaemonResponse, err error) {
+	if err != nil {
+		output.PrintError(verb + " failed: " + err.Error())
+		ExitWithError()
+	}
+	if !resp.OK {
+		output.PrintError(verb + " failed: " + resp.Error)
+		ExitWithError()
+	}
+}
+
 func selectMount(hint string) *mount.MountInfo {
 	return selectMountIn(ownedMounts(), hint)
 }
@@ -335,6 +383,68 @@ func selectMountIn(mounts []*mount.MountInfo, hint string) *mount.MountInfo {
 		ExitWithError()
 	}
 	return best
+}
+
+const (
+	mountLogTailLines = 10
+	mountLogTailBytes = 8 << 10
+)
+
+func tailLines(path string, n int) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	start := int64(0)
+	if fi.Size() > mountLogTailBytes {
+		start = fi.Size() - mountLogTailBytes
+	}
+	buf := make([]byte, fi.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return nil
+	}
+
+	lines := strings.Split(string(buf), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:]
+	}
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l = strings.TrimRight(l, "\r"); strings.TrimSpace(l) != "" {
+			out = append(out, l)
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return out
+}
+
+func printMountLogHint(logPath string) {
+	tail := tailLines(logPath, mountLogTailLines)
+	if len(tail) == 0 {
+		output.PrintInfo("Daemon log (empty so far): " + logPath)
+	} else {
+		output.PrintInfo("Last lines of " + logPath + ":")
+		for _, l := range tail {
+			fmt.Fprintln(os.Stderr, "    "+l)
+		}
+	}
+	fatalPath := mlog.FatalLogPath(logPath)
+	fatalTail := tailLines(fatalPath, mountLogTailLines)
+	if len(fatalTail) == 0 {
+		return
+	}
+	output.PrintInfo("Last lines of " + fatalPath + " (runtime fatals):")
+	for _, l := range fatalTail {
+		fmt.Fprintln(os.Stderr, "    "+l)
+	}
 }
 
 func runMountStart(remotePath, mountPoint string) {
@@ -425,7 +535,7 @@ func runMountStart(remotePath, mountPoint string) {
 		output.PrintInfo("Warning: signing keys not loaded — uploads will be rejected. Open the web app to finish E2EE setup.")
 	}
 
-	spawnKeys := mount.SpawnKeys{
+	spawnKeys := spawn.Keys{
 		PubHex:        hex.EncodeToString(keys.PublicKey[:]),
 		PrivHex:       hex.EncodeToString(keys.PrivateKey[:]),
 		KyberPubHex:   hex.EncodeToString(keys.KyberPublicKey),
@@ -437,9 +547,12 @@ func runMountStart(remotePath, mountPoint string) {
 		SignPrivMlHex: hex.EncodeToString(keys.SigningPrivateKeyMldsa),
 	}
 
-	if err := mount.SpawnBackground(remotePath, mountPoint, spawnKeys,
-		cacheSizeBytes, mnPollInterval, mode, mnReadOnly); err != nil {
-		output.PrintError("Failed to start mount daemon: " + err.Error())
+	logPath := mount.MountLogPath(ownerID, remotePath)
+
+	if err := spawn.Background(remotePath, mountPoint, spawnKeys,
+		cacheSizeBytes, mnPollInterval, mode, mnReadOnly, mnLogLevel); err != nil {
+		output.PrintError("Failed to start mount daemon: " + err.Error() + " (log: " + logPath + ")")
+		printMountLogHint(logPath)
 		ExitWithError()
 	}
 
@@ -453,7 +566,8 @@ func runMountStart(remotePath, mountPoint string) {
 	}
 
 	if !ready {
-		output.PrintError("Mount daemon failed to start")
+		output.PrintError("Mount daemon failed to start; the cause is in the daemon log: " + logPath)
+		printMountLogHint(logPath)
 		ExitWithError()
 	}
 
@@ -522,8 +636,9 @@ type mountStatusJSON struct {
 	CacheMax   int64  `json:"cache_max"`
 	Pending    int    `json:"pending"`
 	Failed     int    `json:"failed"`
-	LastPoll   string `json:"last_poll"`
-	Uptime     string `json:"uptime"`
+	StalledDownloads int    `json:"stalled_downloads,omitempty"`
+	LastPoll         string `json:"last_poll"`
+	Uptime           string `json:"uptime"`
 }
 
 type mountStatusListJSON struct {
@@ -548,18 +663,19 @@ func staleMountStatusJSON(info *mount.MountInfo) mountStatusJSON {
 
 func buildMountStatusJSON(info *mount.MountInfo, resp *mount.DaemonResponse) mountStatusJSON {
 	m := mountStatusJSON{
-		Running:    true,
-		Mode:       resp.Mode,
-		MountPoint: resp.MountPoint,
-		RemotePath: resp.RemotePath,
-		SyncDir:    resp.SyncDir,
-		Online:     resp.Online,
-		CacheUsed:  resp.CacheUsed,
-		CacheMax:   resp.CacheMax,
-		Pending:    resp.PendingCount,
-		Failed:     resp.FailedCount,
-		LastPoll:   resp.LastPoll,
-		Uptime:     resp.Uptime,
+		Running:          true,
+		Mode:             resp.Mode,
+		MountPoint:       resp.MountPoint,
+		RemotePath:       resp.RemotePath,
+		SyncDir:          resp.SyncDir,
+		Online:           resp.Online,
+		CacheUsed:        resp.CacheUsed,
+		CacheMax:         resp.CacheMax,
+		Pending:          resp.PendingCount,
+		Failed:           resp.FailedCount,
+		StalledDownloads: resp.FailedDownloadCount,
+		LastPoll:         resp.LastPoll,
+		Uptime:           resp.Uptime,
 	}
 	if m.Mode == "" {
 		m.Mode = mount.ModeVirtual
@@ -614,6 +730,9 @@ func printMountTable(mounts []*mount.MountInfo) {
 				state = "online"
 			}
 			queue = fmt.Sprintf(", %d pending, %d failed", resp.PendingCount, resp.FailedCount)
+			if resp.FailedDownloadCount > 0 {
+				queue += fmt.Sprintf(", %d downloads stalled", resp.FailedDownloadCount)
+			}
 		}
 		marker := ""
 		if m.Owner != "" && owner != "" && m.Owner != owner {
@@ -670,85 +789,92 @@ func printMountDetail(info *mount.MountInfo) {
 	fmt.Printf("Status:  %s\n", status)
 	fmt.Printf("Cache:   %d MB / %d MB\n", cacheUsedMB, cacheMaxMB)
 	fmt.Printf("Queue:   %d pending, %d failed\n", resp.PendingCount, resp.FailedCount)
+	if resp.FailedDownloadCount > 0 {
+		fmt.Printf("Downloads: %d stalled\n", resp.FailedDownloadCount)
+	}
 	if resp.LastPoll != "" {
 		fmt.Printf("Poll:    %s\n", resp.LastPoll)
 	}
 	fmt.Printf("Uptime:  %s\n", resp.Uptime)
+	if resp.FailedCount > 0 || resp.FailedDownloadCount > 0 {
+		fmt.Println()
+		output.PrintInfo("Inspect with: pc mn files --issues, re-attempt with: pc mn retry")
+	}
 }
 
 func runMountFiles(hint string) {
-	info := selectMount(hint)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
-
-	cacheDB, err := cache.Open(info.CacheDir)
-	if err != nil {
-		output.PrintError("Failed to read cache: " + err.Error())
-		ExitWithError()
-	}
-	defer cacheDB.Close()
-
-	if mnFilesIssuesOnly {
-		issues, err := cacheDB.ListIssues()
+	withMount(hint, func(info *mount.MountInfo) {
+		cacheDB, err := cache.Open(info.CacheDir)
 		if err != nil {
-			output.PrintError("Failed to list issues: " + err.Error())
+			output.PrintError("Failed to read cache: " + err.Error())
 			ExitWithError()
 		}
+		defer cacheDB.Close()
 
-		if len(issues) == 0 {
-			output.PrintSuccess("No sync issues")
+		if mnFilesIssuesOnly {
+			issues, err := cacheDB.ListIssues()
+			if err != nil {
+				output.PrintError("Failed to list issues: " + err.Error())
+				ExitWithError()
+			}
+
+			if len(issues) == 0 {
+				output.PrintSuccess("No sync issues")
+				return
+			}
+
+			rejected := 0
+			failed := 0
+			conflicts := 0
+			for _, inode := range issues {
+				switch inode.SyncStatus {
+				case cache.StatusRejected:
+					rejected++
+				case cache.StatusFailed:
+					failed++
+				case cache.StatusConflict:
+					conflicts++
+				}
+			}
+
+			var parts []string
+			if rejected > 0 {
+				parts = append(parts, fmt.Sprintf("%d rejected", rejected))
+			}
+			if failed > 0 {
+				parts = append(parts, fmt.Sprintf("%d failed", failed))
+			}
+			if conflicts > 0 {
+				parts = append(parts, fmt.Sprintf("%d conflicts", conflicts))
+			}
+			fmt.Printf("%s:\n\n", strings.Join(parts, ", "))
+			printInodeList(issues, false)
+			if failed > 0 {
+				fmt.Println()
+				output.PrintInfo("Re-attempt after fixing the cause: pc mn retry [path]")
+			}
 			return
 		}
 
-		rejected := 0
-		failed := 0
-		conflicts := 0
-		for _, inode := range issues {
-			switch inode.SyncStatus {
-			case cache.StatusRejected:
-				rejected++
-			case cache.StatusFailed:
-				failed++
-			case cache.StatusConflict:
-				conflicts++
-			}
+		all, err := cacheDB.AllInodes()
+		if err != nil {
+			output.PrintError("Failed to list files: " + err.Error())
+			ExitWithError()
 		}
 
-		var parts []string
-		if rejected > 0 {
-			parts = append(parts, fmt.Sprintf("%d rejected", rejected))
+		if len(all) == 0 {
+			output.PrintInfo("No cached files")
+			return
 		}
-		if failed > 0 {
-			parts = append(parts, fmt.Sprintf("%d failed", failed))
+
+		fmt.Printf("Mount: %s -> %s\n\n", info.RemotePath, info.MountPoint)
+
+		if mnFilesTree {
+			printInodeTree(all)
+		} else {
+			printInodeList(all, false)
 		}
-		if conflicts > 0 {
-			parts = append(parts, fmt.Sprintf("%d conflicts", conflicts))
-		}
-		fmt.Printf("%s:\n\n", strings.Join(parts, ", "))
-		printInodeList(issues, false)
-		return
-	}
-
-	all, err := cacheDB.AllInodes()
-	if err != nil {
-		output.PrintError("Failed to list files: " + err.Error())
-		ExitWithError()
-	}
-
-	if len(all) == 0 {
-		output.PrintInfo("No cached files")
-		return
-	}
-
-	fmt.Printf("Mount: %s -> %s\n\n", info.RemotePath, info.MountPoint)
-
-	if mnFilesTree {
-		printInodeTree(all)
-	} else {
-		printInodeList(all, false)
-	}
+	})
 }
 
 func printInodeList(inodes []*cache.Inode, indent bool) {
@@ -865,174 +991,151 @@ func parentOf(remotePath string) string {
 }
 
 func runMountPin(p string) {
-	info := selectMount(p)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
+	withMount(p, func(info *mount.MountInfo) {
+		p = strings.TrimPrefix(p, "/")
 
-	p = strings.TrimPrefix(p, "/")
-
-	resp, err := mount.SendRequestWithPath(info, "pin", p)
-	if err != nil || !resp.OK {
-		output.PrintError("Pin failed")
-		ExitWithError()
-	}
-	output.PrintSuccess(fmt.Sprintf("Pinned: %s", p))
+		resp, err := mount.SendRequestWithPath(info, "pin", p)
+		reportIPC("Pin", resp, err)
+		output.PrintSuccess(fmt.Sprintf("Pinned: %s", p))
+	})
 }
 
 func runMountUnpin(p string) {
-	info := selectMount(p)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
+	withMount(p, func(info *mount.MountInfo) {
+		p = strings.TrimPrefix(p, "/")
 
-	p = strings.TrimPrefix(p, "/")
-
-	resp, err := mount.SendRequestWithPath(info, "unpin", p)
-	if err != nil || !resp.OK {
-		output.PrintError("Unpin failed")
-		ExitWithError()
-	}
-	output.PrintSuccess(fmt.Sprintf("Unpinned: %s", p))
+		resp, err := mount.SendRequestWithPath(info, "unpin", p)
+		reportIPC("Unpin", resp, err)
+		output.PrintSuccess(fmt.Sprintf("Unpinned: %s", p))
+	})
 }
 
 func runMountPinList() {
-	info := selectMount("")
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
+	withMount("", func(info *mount.MountInfo) {
+		cacheDB, err := cache.Open(info.CacheDir)
+		if err != nil {
+			output.PrintError("Failed to read cache: " + err.Error())
+			ExitWithError()
+		}
+		defer cacheDB.Close()
 
-	cacheDB, err := cache.Open(info.CacheDir)
-	if err != nil {
-		output.PrintError("Failed to read cache: " + err.Error())
-		ExitWithError()
-	}
-	defer cacheDB.Close()
+		pinned, err := cacheDB.ListPinned()
+		if err != nil {
+			output.PrintError("Failed to list pinned: " + err.Error())
+			ExitWithError()
+		}
 
-	pinned, err := cacheDB.ListPinned()
-	if err != nil {
-		output.PrintError("Failed to list pinned: " + err.Error())
-		ExitWithError()
-	}
+		if len(pinned) == 0 {
+			output.PrintInfo("No pinned files")
+			return
+		}
 
-	if len(pinned) == 0 {
-		output.PrintInfo("No pinned files")
-		return
-	}
-
-	for _, inode := range pinned {
-		fmt.Printf("  %s\n", inode.RemotePath)
-	}
+		for _, inode := range pinned {
+			fmt.Printf("  %s\n", inode.RemotePath)
+		}
+	})
 }
 
 func runMountConflicts(hint string) {
-	info := selectMount(hint)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
-
-	cacheDB, err := cache.Open(info.CacheDir)
-	if err != nil {
-		output.PrintError("Failed to read cache: " + err.Error())
-		ExitWithError()
-	}
-	defer cacheDB.Close()
-
-	issues, err := cacheDB.ListIssues()
-	if err != nil {
-		output.PrintError("Failed to list conflicts: " + err.Error())
-		ExitWithError()
-	}
-
-	var conflicts []*cache.Inode
-	for _, inode := range issues {
-		if inode.SyncStatus == cache.StatusConflict {
-			conflicts = append(conflicts, inode)
+	withMount(hint, func(info *mount.MountInfo) {
+		cacheDB, err := cache.Open(info.CacheDir)
+		if err != nil {
+			output.PrintError("Failed to read cache: " + err.Error())
+			ExitWithError()
 		}
-	}
+		defer cacheDB.Close()
 
-	if len(conflicts) == 0 {
-		output.PrintSuccess("No conflicts")
-		return
-	}
+		issues, err := cacheDB.ListIssues()
+		if err != nil {
+			output.PrintError("Failed to list conflicts: " + err.Error())
+			ExitWithError()
+		}
 
-	fmt.Printf("%d conflict(s): changed both locally and remotely\n\n", len(conflicts))
-	printInodeList(conflicts, false)
-	fmt.Println()
-	output.PrintInfo("Settle with: pc mn resolve <path> -k local|remote|both")
+		var conflicts []*cache.Inode
+		for _, inode := range issues {
+			if inode.SyncStatus == cache.StatusConflict {
+				conflicts = append(conflicts, inode)
+			}
+		}
+
+		if len(conflicts) == 0 {
+			output.PrintSuccess("No conflicts")
+			return
+		}
+
+		fmt.Printf("%d conflict(s): changed both locally and remotely\n\n", len(conflicts))
+		printInodeList(conflicts, false)
+		fmt.Println()
+		output.PrintInfo("Settle with: pc mn resolve <path> -k local|remote|both")
+	})
 }
 
 func runMountResolve(remotePath string) {
-	info := selectMount(remotePath)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
-
-	keep := strings.ToLower(mnResolveKeep)
-	if keep != "local" && keep != "remote" && keep != "both" {
-		output.PrintError("--keep must be local, remote, or both")
-		ExitWithError()
-	}
-
-	remotePath = strings.TrimPrefix(remotePath, "/")
-
-	if keep == "remote" && !mnResolveForce {
-		fmt.Printf("Discard your local edit of %s and re-download the remote file? [y/N] ", remotePath)
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(line)) != "y" {
-			output.PrintInfo("Cancelled")
-			return
+	withMount(remotePath, func(info *mount.MountInfo) {
+		keep := strings.ToLower(mnResolveKeep)
+		if keep != "local" && keep != "remote" && keep != "both" {
+			output.PrintError("--keep must be local, remote, or both")
+			ExitWithError()
 		}
-	}
 
-	resp, err := mount.SendResolve(info, remotePath, keep)
-	if err != nil {
-		output.PrintError("Resolve failed: " + err.Error())
-		ExitWithError()
-	}
-	if !resp.OK {
-		output.PrintError("Resolve failed: " + resp.Error)
-		ExitWithError()
-	}
+		remotePath = strings.TrimPrefix(remotePath, "/")
 
-	switch keep {
-	case "local":
-		output.PrintSuccess(fmt.Sprintf("Kept local edit of %s; upload queued", remotePath))
-	case "remote":
-		output.PrintSuccess(fmt.Sprintf("Discarded local edit of %s; re-downloading", remotePath))
-	case "both":
-		output.PrintSuccess(fmt.Sprintf("Kept local edit as a conflict copy; re-downloading %s", remotePath))
-	}
+		if keep == "remote" && !mnResolveForce {
+			fmt.Printf("Discard your local edit of %s and re-download the remote file? [y/N] ", remotePath)
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(line)) != "y" {
+				output.PrintInfo("Cancelled")
+				return
+			}
+		}
+
+		resp, err := mount.SendResolve(info, remotePath, keep)
+		reportIPC("Resolve", resp, err)
+
+		switch keep {
+		case "local":
+			output.PrintSuccess(fmt.Sprintf("Kept local edit of %s; upload queued", remotePath))
+		case "remote":
+			output.PrintSuccess(fmt.Sprintf("Discarded local edit of %s; re-downloading", remotePath))
+		case "both":
+			output.PrintSuccess(fmt.Sprintf("Kept local edit as a conflict copy; re-downloading %s", remotePath))
+		}
+	})
 }
 
 func runMountClean(hint string) {
-	info := selectMount(hint)
-	if info == nil {
-		output.PrintInfo("Not mounted")
-		return
-	}
+	withMount(hint, func(info *mount.MountInfo) {
+		resp, err := mount.SendRequest(info, "clean")
+		reportIPC("Clean", resp, err)
 
-	resp, err := mount.SendRequest(info, "clean")
-	if err != nil {
-		output.PrintError("Clean failed: " + err.Error())
-		ExitWithError()
-	}
-	if !resp.OK {
-		output.PrintError("Clean failed: " + resp.Error)
-		ExitWithError()
-	}
+		if resp.Cleaned == 0 {
+			output.PrintInfo("No rejected files to clean")
+		} else {
+			output.PrintSuccess(fmt.Sprintf("Removed %d rejected file(s)", resp.Cleaned))
+		}
+	})
+}
 
-	if resp.Cleaned == 0 {
-		output.PrintInfo("No rejected files to clean")
-	} else {
-		output.PrintSuccess(fmt.Sprintf("Removed %d rejected file(s)", resp.Cleaned))
-	}
+func runMountRetry(hint string) {
+	withMount(hint, func(info *mount.MountInfo) {
+		path := ""
+		if hint != "" && !sameRemote(hint, info.RemotePath) {
+			path = strings.TrimPrefix(hint, "/")
+		}
+
+		resp, err := mount.SendRetry(info, path)
+		reportIPC("Retry", resp, err)
+
+		switch {
+		case resp.Retried == 0 && path != "":
+			output.PrintInfo(path + " has no failed transfer to retry")
+		case resp.Retried == 0:
+			output.PrintInfo("No failed transfers to retry")
+		default:
+			output.PrintSuccess(fmt.Sprintf("Re-queued %d failed transfer(s)", resp.Retried))
+		}
+	})
 }
 
 func defaultMountPoint() string {

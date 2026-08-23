@@ -1,17 +1,15 @@
 package cmd
 
 import (
-	"context"
-	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var mkParents bool
@@ -38,16 +36,14 @@ func init() {
 }
 
 func runMk(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
 	options := map[string]string{"source": resolvedPath}
 	if mkParents {
 		options["parents"] = "true"
-		fullPath, _ := cmdutil.ResolveAndBaseName(resolvedPath)
+		fullPath, _ := e2ee.ResolveAndBaseName(resolvedPath)
 		segments := strings.Split(strings.Trim(fullPath, "/"), "/")
 		var nonEmpty []string
 		for _, s := range segments {
@@ -56,23 +52,13 @@ func runMk(targetPath string) {
 				nonEmpty = append(nonEmpty, s)
 			}
 		}
-		cmdutil.AddE2eeNameFieldsForMkParents(options, nonEmpty, ExitWithError)
+		e2ee.AddE2eeNameFieldsForMkParents(options, nonEmpty, ExitWithError)
 	} else {
-		fullPath, baseName := cmdutil.ResolveAndBaseName(resolvedPath)
-		cmdutil.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
+		fullPath, baseName := e2ee.ResolveAndBaseName(resolvedPath)
+		e2ee.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.CdPayload](ctx, "mk", options, ExitWithError)
 

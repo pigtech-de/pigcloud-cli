@@ -8,10 +8,11 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/config"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var configCmd = &cobra.Command{

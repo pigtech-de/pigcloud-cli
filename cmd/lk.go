@@ -1,11 +1,14 @@
 package cmd
 
 import (
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/mount"
 	"pigcloud/internal/output"
+	"pigcloud/internal/tree"
+
+	"github.com/spf13/cobra"
 )
 
 var lkCmd = &cobra.Command{
@@ -47,6 +50,7 @@ func runLock() {
 		ExitWithError()
 	}
 
-	cmdutil.ClearCachedKey()
+	e2ee.ClearCachedKey()
 	output.PrintSuccess("Locked")
+	tree.ClearCache()
 }

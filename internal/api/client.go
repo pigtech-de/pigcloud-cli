@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"pigcloud/internal/config"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,33 +38,136 @@ const (
 
 var Version = "dev"
 
+var TransferStallTimeout = 2 * time.Minute
+
+var errTransferStalled = errors.New("transfer stalled")
+
+func dialer() func(context.Context, string, string) (net.Conn, error) {
+	return (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+}
+
+type stallGuard struct {
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	timer  stallTimer
+	fired  bool
+	done   bool
+}
+
+type stallTimer interface {
+	Reset(time.Duration) bool
+	Stop() bool
+}
+
+var newStallTimer = func(d time.Duration, fire func()) stallTimer { return time.AfterFunc(d, fire) }
+
+func newStallGuard(parent context.Context) (context.Context, *stallGuard) {
+	ctx, cancel := context.WithCancel(parent)
+	g := &stallGuard{cancel: cancel}
+	g.timer = newStallTimer(TransferStallTimeout, g.trip)
+	g.timer.Stop()
+	return ctx, g
+}
+
+func (g *stallGuard) trip() {
+	g.mu.Lock()
+	if g.done {
+		g.mu.Unlock()
+		return
+	}
+	g.fired = true
+	g.mu.Unlock()
+	g.cancel()
+}
+
+func (g *stallGuard) arm() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.done {
+		g.timer.Reset(TransferStallTimeout)
+	}
+}
+
+func (g *stallGuard) pause() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.timer.Stop()
+}
+
+func (g *stallGuard) stop() {
+	g.mu.Lock()
+	g.done = true
+	g.timer.Stop()
+	g.mu.Unlock()
+	g.cancel()
+}
+
+func (g *stallGuard) tripped() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.fired
+}
+
+func (g *stallGuard) classify(err error) error {
+	if err == nil || !g.tripped() {
+		return err
+	}
+	return &RequestError{
+		Kind: KindTransient,
+		Err:  fmt.Errorf("%w: no bytes moved for %s", errTransferStalled, TransferStallTimeout),
+	}
+}
+
+func (g *stallGuard) watch(r io.Reader) io.Reader { return &stallReader{g: g, r: r} }
+
+type stallReader struct {
+	g *stallGuard
+	r io.Reader
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	s.g.arm()
+	n, err := s.r.Read(p)
+	if err != nil {
+		s.g.pause()
+	}
+	return n, err
+}
+
+func newTransport(maxIdle int, idleTimeout, responseHeaderTimeout time.Duration) *http.Transport {
+	return &http.Transport{
+		MaxIdleConns:        maxIdle,
+		IdleConnTimeout:     idleTimeout,
+		TLSHandshakeTimeout: 10 * time.Second,
+		DialContext:         dialer(),
+		ForceAttemptHTTP2:   true,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+	}
+}
+
 var (
-	defaultTransport = &http.Transport{
-		MaxIdleConns:        10,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}
-	validationTransport = &http.Transport{
-		MaxIdleConns:        2,
-		IdleConnTimeout:     30 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}
+	defaultTransport    = newTransport(10, 90*time.Second, ClientTimeout)
+	validationTransport = newTransport(2, 30*time.Second, KeyValidationTimeout)
 )
 
 type Client struct {
 	httpClient *http.Client
+	timeout    time.Duration
 	endpoint   string
 	apiKey     string
+
+	sessionMu sync.Mutex
+	session   *webUploadSession
 }
 
 type Response struct {
-	Success    bool   `json:"success"`
-	MessageKey string `json:"messageKey"`
-	Message    string `json:"message"`
-	ErrorCode  string `json:"errorCode,omitempty"`
-	Cwd        string `json:"cwd"`
-	StatusCode int    `json:"-"`
-	Raw json.RawMessage `json:"-"`
+	Success    bool            `json:"success"`
+	MessageKey string          `json:"messageKey"`
+	Message    string          `json:"message"`
+	ErrorCode  string          `json:"errorCode,omitempty"`
+	Cwd        string          `json:"cwd"`
+	StatusCode int             `json:"-"`
+	Raw        json.RawMessage `json:"-"`
 }
 
 type APIError struct {
@@ -84,6 +189,7 @@ type ListEntry struct {
 	Direct          bool    `json:"direct"`
 	Permission      *string `json:"permission"`
 	E2EEDisplayName string  `json:"e2ee_display_name,omitempty"`
+	SignedBy        string  `json:"signed_by,omitempty"`
 }
 
 type ListPayload struct {
@@ -94,6 +200,7 @@ type ListPayload struct {
 }
 
 type InfoDetails struct {
+	NodeID          string           `json:"nodeId,omitempty"`
 	Path            string           `json:"path"`
 	Name            string           `json:"name"`
 	Type            string           `json:"type"`
@@ -147,6 +254,8 @@ type DownloadPayload struct {
 	SignatureMldsa   string `json:"signature_mldsa,omitempty"`
 	SigningPkEd25519 string `json:"signing_pk_ed25519,omitempty"`
 	SigningPkMldsa   string `json:"signing_pk_mldsa,omitempty"`
+
+	SignedBy string `json:"signed_by,omitempty"`
 
 	TEESignatureEd25519 string `json:"tee_signature_ed25519,omitempty"`
 	TEESignatureMldsa   string `json:"tee_signature_mldsa,omitempty"`
@@ -272,6 +381,8 @@ type CatPayload struct {
 	SigningPkEd25519 string `json:"signing_pk_ed25519,omitempty"`
 	SigningPkMldsa   string `json:"signing_pk_mldsa,omitempty"`
 
+	SignedBy string `json:"signed_by,omitempty"`
+
 	TEESignatureEd25519 string `json:"tee_signature_ed25519,omitempty"`
 	TEESignatureMldsa   string `json:"tee_signature_mldsa,omitempty"`
 	TEESigningPkEd25519 string `json:"tee_signing_pk_ed25519,omitempty"`
@@ -287,6 +398,7 @@ func (p *CatPayload) AsDownloadResult() *DownloadResult {
 		SignatureMldsa:      p.SignatureMldsa,
 		SigningPkEd25519:    p.SigningPkEd25519,
 		SigningPkMldsa:      p.SigningPkMldsa,
+		SignedBy:            p.SignedBy,
 		TEESignatureEd25519: p.TEESignatureEd25519,
 		TEESignatureMldsa:   p.TEESignatureMldsa,
 		TEESigningPkEd25519: p.TEESigningPkEd25519,
@@ -724,10 +836,10 @@ func NewClient() *Client {
 	}
 	return &Client{
 		httpClient: &http.Client{
-			Timeout:       ClientTimeout,
 			Transport:     defaultTransport,
 			CheckRedirect: dropAPIKeyOnHostChange,
 		},
+		timeout:  ClientTimeout,
 		endpoint: endpoint,
 		apiKey:   config.GetAPIKey(),
 	}
@@ -736,37 +848,45 @@ func NewClient() *Client {
 func NewClientWithKey(apiKey string) *Client {
 	return &Client{
 		httpClient: &http.Client{
-			Timeout:       KeyValidationTimeout,
 			Transport:     validationTransport,
 			CheckRedirect: dropAPIKeyOnHostChange,
 		},
+		timeout:  KeyValidationTimeout,
 		endpoint: config.GetEndpoint(),
 		apiKey:   apiKey,
 	}
 }
 
-func (c *Client) getCliEndpoint() string {
-	endpoint := c.endpoint
-	if strings.Contains(endpoint, "?") {
-		return endpoint + "&action=cli"
+func (c *Client) requestCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.timeout <= 0 {
+		return ctx, func() {}
 	}
-	return endpoint + "?action=cli"
+	return context.WithTimeout(ctx, c.timeout)
+}
+
+func (c *Client) getCliEndpoint() string {
+	return c.actionEndpoint("cli")
 }
 
 var retryDelays = []time.Duration{1 * time.Second, 2 * time.Second}
 
+var (
+	uploadSingleBodyMaxBytes int64 = 90 * 1024 * 1024
+	uploadChunkSize          int64 = 16 * 1024 * 1024
+)
+
 func isTransient(err error, statusCode int) bool {
-	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return true
-		}
-		msg := err.Error()
-		if strings.Contains(msg, "connection reset") || strings.Contains(msg, "EOF") {
-			return true
-		}
+	if err == nil {
+		return false
 	}
-	return statusCode >= 500 && statusCode != 501
+	var reqErr *RequestError
+	if errors.As(err, &reqErr) {
+		return reqErr.Kind == KindTransient
+	}
+	if transportRetryable(err) {
+		return true
+	}
+	return classifyStatus(statusCode) == KindTransient
 }
 
 func withRetry[T any](ctx context.Context, fn func() (T, int, error)) (T, error) {
@@ -796,15 +916,15 @@ func (c *Client) Execute(ctx context.Context, command string, options map[string
 	}
 
 	return withRetry(ctx, func() (*Response, int, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
+		attemptCtx, cancel := c.requestCtx(ctx)
+		defer cancel()
+		req, err := http.NewRequestWithContext(attemptCtx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(HeaderAPIKey, c.apiKey)
-		req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-		req.Header.Set(HeaderCliLang, config.GetLanguage())
+		c.setCommonHeaders(req)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -832,34 +952,82 @@ func (c *Client) Execute(ctx context.Context, command string, options map[string
 	})
 }
 
-func (c *Client) Upload(ctx context.Context, localPath string, remotePath string, progress func(sent, total int64), e2eeOpts ...map[string]string) (*Response, error) {
-	fileName := filepath.Base(localPath)
+func NewUploadIdempotencyKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("ul-%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
-	metadata := CLIRequest{
-		Command: "ul",
-		Options: map[string]string{
-			"source": fileName,
-			"target": remotePath,
-		},
+func (c *Client) Upload(ctx context.Context, localPath string, remotePath string, progress func(sent, total int64), e2eeOpts ...map[string]string) (*Response, error) {
+	options := map[string]string{
+		"source": filepath.Base(localPath),
+		"target": remotePath,
 	}
 	if len(e2eeOpts) > 0 {
 		if name, ok := e2eeOpts[0]["_original_name"]; ok {
-			metadata.Options["source"] = name
+			options["source"] = name
 			delete(e2eeOpts[0], "_original_name")
 		}
 	}
 	if len(e2eeOpts) > 0 && e2eeOpts[0] != nil {
 		for k, v := range e2eeOpts[0] {
-			metadata.Options[k] = v
+			options[k] = v
 		}
 	}
-	metadataJSON, err := json.Marshal(metadata)
+	if options["upload_idempotency_key"] == "" {
+		options["upload_idempotency_key"] = NewUploadIdempotencyKey()
+	}
+
+	stat, err := os.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+	if stat.Size() > uploadSingleBodyMaxBytes {
+		return c.uploadChunked(ctx, localPath, remotePath, stat.Size(), progress, options)
+	}
+
+	resp, err := c.uploadWholeBody(ctx, localPath, progress, options)
+	if err != nil && bodyTooLarge(err) {
+		return c.uploadChunked(ctx, localPath, remotePath, stat.Size(), progress, options)
+	}
+	return resp, err
+}
+
+func bodyTooLarge(err error) bool {
+	var rejection *proxyRejection
+	return errors.As(err, &rejection) && rejection.status == http.StatusRequestEntityTooLarge
+}
+
+func uploadWireName(name string) string {
+	dot := strings.LastIndex(name, ".")
+	if dot <= 0 {
+		return "f"
+	}
+	return "f" + strings.ToLower(name[dot:])
+}
+
+func (c *Client) uploadWholeBody(ctx context.Context, localPath string, progress func(sent, total int64), options map[string]string) (*Response, error) {
+	wireOptions := options
+	realName := options["source"]
+	stubbed := options["sealed_key"] != ""
+	if stubbed {
+		wireOptions = make(map[string]string, len(options))
+		for k, v := range options {
+			wireOptions[k] = v
+		}
+		wireOptions["source"] = uploadWireName(realName)
+	}
+	metadataJSON, err := json.Marshal(CLIRequest{Command: "ul", Options: wireOptions})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 	metadataB64 := base64.StdEncoding.EncodeToString(metadataJSON)
 
-	return withRetry(ctx, func() (*Response, int, error) {
+	resp, err := withRetry(ctx, func() (*Response, int, error) {
 		file, err := os.Open(localPath)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to open file: %w", err)
@@ -874,43 +1042,70 @@ func (c *Client) Upload(ctx context.Context, localPath string, remotePath string
 
 		pr := &progressReader{reader: file, total: fileSize, progress: progress}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", c.getCliEndpoint(), pr)
+		streamCtx, guard := newStallGuard(ctx)
+		defer guard.stop()
+
+		req, err := http.NewRequestWithContext(streamCtx, "POST", c.getCliEndpoint(), guard.watch(pr))
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("Content-Length", fmt.Sprintf("%d", fileSize))
-		req.Header.Set(HeaderAPIKey, c.apiKey)
-		req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-		req.Header.Set(HeaderCliLang, config.GetLanguage())
+		c.setCommonHeaders(req)
 		req.Header.Set(HeaderCliMetadata, metadataB64)
 		req.ContentLength = fileSize
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return nil, 0, fmt.Errorf("request failed: %w", err)
+			return nil, 0, guard.classify(fmt.Errorf("request failed: %w", err))
 		}
 		defer resp.Body.Close()
 
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, ResponseSizeLimit))
+		respBody, err := io.ReadAll(io.LimitReader(guard.watch(resp.Body), ResponseSizeLimit))
 		if err != nil {
-			return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
+			return nil, resp.StatusCode, guard.classify(fmt.Errorf("failed to read response: %w", err))
 		}
 
 		if len(respBody) == 0 {
+			if resp.StatusCode != 200 {
+				return nil, resp.StatusCode, statusError(resp, rejectionError(resp.StatusCode, nil))
+			}
 			return nil, resp.StatusCode, fmt.Errorf("empty response from server (status %d)", resp.StatusCode)
 		}
 
 		var apiResp Response
 		if err := json.Unmarshal(respBody, &apiResp); err != nil {
+			if resp.StatusCode != 200 {
+				return nil, resp.StatusCode, statusError(resp, rejectionError(resp.StatusCode, respBody))
+			}
 			return nil, resp.StatusCode, fmt.Errorf("failed to parse response (status %d): %w", resp.StatusCode, err)
+		}
+
+		if resp.StatusCode != 200 && !apiResp.Success {
+			msg := apiResp.Message
+			if msg == "" {
+				msg = fmt.Sprintf("upload failed with status %d", resp.StatusCode)
+			}
+			return nil, resp.StatusCode, statusError(resp, &APIError{Code: apiResp.ErrorCode, Message: msg})
 		}
 
 		apiResp.StatusCode = resp.StatusCode
 		apiResp.Raw = respBody
 		return &apiResp, resp.StatusCode, nil
 	})
+	if err != nil || resp == nil || !stubbed || !resp.Success || len(resp.Raw) == 0 {
+		return resp, err
+	}
+	var payload map[string]any
+	if json.Unmarshal(resp.Raw, &payload) == nil {
+		payload["name"] = realName
+		payload["storedPath"] = joinRemotePath(options["target"], realName)
+		if raw, marshalErr := json.Marshal(payload); marshalErr == nil {
+			resp.Raw = raw
+		}
+	}
+	return resp, nil
 }
 
 type DownloadResult struct {
@@ -922,6 +1117,7 @@ type DownloadResult struct {
 	SignatureMldsa   string
 	SigningPkEd25519 string
 	SigningPkMldsa   string
+	SignedBy         string
 
 	TEESignatureEd25519 string
 	TEESignatureMldsa   string
@@ -949,6 +1145,7 @@ func parseDownloadMetadata(metaHeader string) *DownloadResult {
 	result.SignatureMldsa = dlPayload.SignatureMldsa
 	result.SigningPkEd25519 = dlPayload.SigningPkEd25519
 	result.SigningPkMldsa = dlPayload.SigningPkMldsa
+	result.SignedBy = dlPayload.SignedBy
 	result.TEESignatureEd25519 = dlPayload.TEESignatureEd25519
 	result.TEESignatureMldsa = dlPayload.TEESignatureMldsa
 	result.TEESigningPkEd25519 = dlPayload.TEESigningPkEd25519
@@ -956,54 +1153,60 @@ func parseDownloadMetadata(metaHeader string) *DownloadResult {
 	return result
 }
 
-func (c *Client) Download(ctx context.Context, remotePath string, localPath string, progress func(received, total int64), extraOpts ...map[string]string) (*DownloadResult, error) {
-	options := map[string]string{"source": remotePath}
-	if len(extraOpts) > 0 {
-		for k, v := range extraOpts[0] {
-			options[k] = v
+func downloadRejection(resp *http.Response, body []byte) error {
+	if len(body) == 0 {
+		return statusError(resp, fmt.Errorf("download failed with status %d", resp.StatusCode))
+	}
+	var apiResp Response
+	if json.Unmarshal(body, &apiResp) == nil {
+		message := apiResp.Message
+		if message == "" {
+			message = fmt.Sprintf("download failed with status %d", resp.StatusCode)
 		}
+		return statusError(resp, &APIError{Code: apiResp.ErrorCode, Message: message})
 	}
-	jsonBody, err := json.Marshal(CLIRequest{Command: "dl", Options: options})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
+	return statusError(resp, rejectionError(resp.StatusCode, body))
+}
 
+func (c *Client) streamDownload(ctx context.Context, jsonBody []byte, sink func(body io.Reader, total int64) (int, error)) (*DownloadResult, error) {
 	return withRetry(ctx, func() (*DownloadResult, int, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
+		streamCtx, guard := newStallGuard(ctx)
+		defer guard.stop()
+
+		req, err := http.NewRequestWithContext(streamCtx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(HeaderAPIKey, c.apiKey)
-		req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-		req.Header.Set(HeaderCliLang, config.GetLanguage())
+		c.setCommonHeaders(req)
 		req.Header.Set("Accept", "application/octet-stream")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return nil, 0, fmt.Errorf("request failed: %w", err)
+			return nil, 0, guard.classify(fmt.Errorf("request failed: %w", err))
 		}
 		defer resp.Body.Close()
 
 		contentType := resp.Header.Get("Content-Type")
 		if resp.StatusCode != 200 || strings.Contains(contentType, "application/json") {
-			respBody, _ := io.ReadAll(resp.Body)
-			var apiResp Response
-			if err := json.Unmarshal(respBody, &apiResp); err == nil && !apiResp.Success {
-				return nil, resp.StatusCode, &APIError{Code: apiResp.ErrorCode, Message: apiResp.Message}
-			}
-			if len(respBody) > 0 {
-				return nil, resp.StatusCode, fmt.Errorf("download failed: %s", string(respBody))
-			}
-			return nil, resp.StatusCode, fmt.Errorf("download failed with status %d", resp.StatusCode)
+			respBody, _ := io.ReadAll(io.LimitReader(guard.watch(resp.Body), ResponseSizeLimit))
+			return nil, resp.StatusCode, guard.classify(downloadRejection(resp, respBody))
 		}
 
 		result := parseDownloadMetadata(resp.Header.Get(HeaderCliMetadata))
+		if status, err := sink(guard.watch(resp.Body), resp.ContentLength); err != nil {
+			return nil, status, guard.classify(err)
+		}
+		return result, 200, nil
+	})
+}
 
+func fileSink(ctx context.Context, localPath string, progress func(received, total int64)) func(io.Reader, int64) (int, error) {
+	return func(body io.Reader, total int64) (int, error) {
 		tmpFile, err := os.CreateTemp(filepath.Dir(localPath), ".pigcloud-dl-*")
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create temp file: %w", err)
+			return 0, fmt.Errorf("failed to create temp file: %w", err)
 		}
 		tmpPath := tmpFile.Name()
 		defer func() {
@@ -1011,17 +1214,16 @@ func (c *Client) Download(ctx context.Context, remotePath string, localPath stri
 			os.Remove(tmpPath)
 		}()
 
-		total := resp.ContentLength
 		buf := make([]byte, DownloadBufferSize)
 		var received int64
 		for {
 			if err := ctx.Err(); err != nil {
-				return nil, 0, fmt.Errorf("download cancelled: %w", err)
+				return 0, fmt.Errorf("download cancelled: %w", err)
 			}
-			n, readErr := resp.Body.Read(buf)
+			n, readErr := body.Read(buf)
 			if n > 0 {
 				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					return nil, 0, fmt.Errorf("failed to write file: %w", writeErr)
+					return 0, fmt.Errorf("failed to write file: %w", writeErr)
 				}
 				received += int64(n)
 				if progress != nil {
@@ -1032,82 +1234,51 @@ func (c *Client) Download(ctx context.Context, remotePath string, localPath stri
 				break
 			}
 			if readErr != nil {
-				return nil, 0, fmt.Errorf("failed to read response: %w", readErr)
+				return 0, fmt.Errorf("failed to read response: %w", readErr)
 			}
 		}
 
 		if err := tmpFile.Close(); err != nil {
-			return nil, 0, fmt.Errorf("failed to finalize download: %w", err)
+			return 0, fmt.Errorf("failed to finalize download: %w", err)
 		}
 		if err := os.Rename(tmpPath, localPath); err != nil {
-			return nil, 0, fmt.Errorf("failed to move downloaded file: %w", err)
+			return 0, fmt.Errorf("failed to move downloaded file: %w", err)
 		}
+		return 200, nil
+	}
+}
 
-		return result, 200, nil
-	})
+func (c *Client) Download(ctx context.Context, remotePath string, localPath string, progress func(received, total int64), extraOpts ...map[string]string) (*DownloadResult, error) {
+	jsonBody, err := downloadRequestBody("dl", remotePath, extraOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return c.streamDownload(ctx, jsonBody, fileSink(ctx, localPath, progress))
 }
 
 func (c *Client) DownloadToMemory(ctx context.Context, remotePath string, extraOpts ...map[string]string) ([]byte, *DownloadResult, error) {
-	options := map[string]string{"source": remotePath}
-	if len(extraOpts) > 0 {
-		for k, v := range extraOpts[0] {
-			options[k] = v
-		}
-	}
-	jsonBody, err := json.Marshal(CLIRequest{Command: "dl", Options: options})
+	jsonBody, err := downloadRequestBody("dl", remotePath, extraOpts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, nil, err
 	}
 
-	type memResult struct {
-		Data   []byte
-		Result *DownloadResult
-	}
-
-	res, err := withRetry(ctx, func() (*memResult, int, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
+	var data []byte
+	result, err := c.streamDownload(ctx, jsonBody, func(body io.Reader, _ int64) (int, error) {
+		got, err := io.ReadAll(io.LimitReader(body, int64(MaxInMemoryDownloadSize)+1))
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create request: %w", err)
+			return 0, fmt.Errorf("failed to read response body: %w", err)
 		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(HeaderAPIKey, c.apiKey)
-		req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-		req.Header.Set(HeaderCliLang, config.GetLanguage())
-		req.Header.Set("Accept", "application/octet-stream")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, 0, fmt.Errorf("request failed: %w", err)
+		if int64(len(got)) > int64(MaxInMemoryDownloadSize) {
+			return 200, fmt.Errorf("file exceeds %d MB in-memory download limit: %w",
+				MaxInMemoryDownloadSize/(1024*1024), ErrInMemoryDownloadTooLarge)
 		}
-		defer resp.Body.Close()
-
-		contentType := resp.Header.Get("Content-Type")
-		if resp.StatusCode != 200 || strings.Contains(contentType, "application/json") {
-			respBody, _ := io.ReadAll(resp.Body)
-			var apiResp Response
-			if err := json.Unmarshal(respBody, &apiResp); err == nil && !apiResp.Success {
-				return nil, resp.StatusCode, fmt.Errorf("%s", apiResp.Message)
-			}
-			return nil, resp.StatusCode, fmt.Errorf("download failed with status %d", resp.StatusCode)
-		}
-
-		result := parseDownloadMetadata(resp.Header.Get(HeaderCliMetadata))
-
-		data, err := io.ReadAll(io.LimitReader(resp.Body, int64(MaxInMemoryDownloadSize)+1))
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to read response body: %w", err)
-		}
-		if int64(len(data)) > int64(MaxInMemoryDownloadSize) {
-			return nil, 200, fmt.Errorf("file exceeds %d MB in-memory download limit", MaxInMemoryDownloadSize/(1024*1024))
-		}
-
-		return &memResult{Data: data, Result: result}, 200, nil
+		data = got
+		return 200, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return res.Data, res.Result, nil
+	return data, result, nil
 }
 
 func (c *Client) DownloadCommand(ctx context.Context, command string, options map[string]string, localPath string, progress func(received, total int64)) (*DownloadResult, error) {
@@ -1115,81 +1286,21 @@ func (c *Client) DownloadCommand(ctx context.Context, command string, options ma
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	return c.streamDownload(ctx, jsonBody, fileSink(ctx, localPath, progress))
+}
 
-	return withRetry(ctx, func() (*DownloadResult, int, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.getCliEndpoint(), bytes.NewReader(jsonBody))
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create request: %w", err)
+func downloadRequestBody(command, remotePath string, extraOpts ...map[string]string) ([]byte, error) {
+	options := map[string]string{"source": remotePath}
+	if len(extraOpts) > 0 {
+		for k, v := range extraOpts[0] {
+			options[k] = v
 		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(HeaderAPIKey, c.apiKey)
-		req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-		req.Header.Set(HeaderCliLang, config.GetLanguage())
-		req.Header.Set("Accept", "application/octet-stream")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, 0, fmt.Errorf("request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		contentType := resp.Header.Get("Content-Type")
-		if resp.StatusCode != 200 || strings.Contains(contentType, "application/json") {
-			respBody, _ := io.ReadAll(resp.Body)
-			var apiResp Response
-			if err := json.Unmarshal(respBody, &apiResp); err == nil && !apiResp.Success {
-				return nil, resp.StatusCode, fmt.Errorf("%s", apiResp.Message)
-			}
-			return nil, resp.StatusCode, fmt.Errorf("download failed with status %d", resp.StatusCode)
-		}
-
-		result := parseDownloadMetadata(resp.Header.Get(HeaderCliMetadata))
-
-		tmpFile, err := os.CreateTemp(filepath.Dir(localPath), ".pigcloud-dl-*")
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to create temp file: %w", err)
-		}
-		tmpPath := tmpFile.Name()
-		defer func() {
-			tmpFile.Close()
-			os.Remove(tmpPath)
-		}()
-
-		total := resp.ContentLength
-		buf := make([]byte, DownloadBufferSize)
-		var received int64
-		for {
-			if err := ctx.Err(); err != nil {
-				return nil, 0, fmt.Errorf("download cancelled: %w", err)
-			}
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					return nil, 0, fmt.Errorf("failed to write file: %w", writeErr)
-				}
-				received += int64(n)
-				if progress != nil {
-					progress(received, total)
-				}
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				return nil, 0, fmt.Errorf("failed to read response: %w", readErr)
-			}
-		}
-
-		if err := tmpFile.Close(); err != nil {
-			return nil, 0, fmt.Errorf("failed to finalize download: %w", err)
-		}
-		if err := os.Rename(tmpPath, localPath); err != nil {
-			return nil, 0, fmt.Errorf("failed to move downloaded file: %w", err)
-		}
-
-		return result, 200, nil
-	})
+	}
+	jsonBody, err := json.Marshal(CLIRequest{Command: command, Options: options})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	return jsonBody, nil
 }
 
 func (c *Client) Validate(ctx context.Context) (*Response, error) {
@@ -1257,20 +1368,15 @@ func (c *Client) StoreShareDisplayNames(ctx context.Context, recipientUsername s
 }
 
 func (c *Client) postAction(ctx context.Context, action string, body []byte) ([]byte, error) {
-	endpoint := c.endpoint
-	if strings.Contains(endpoint, "?") {
-		endpoint += "&action=" + action
-	} else {
-		endpoint += "?action=" + action
-	}
+	endpoint := c.actionEndpoint(action)
+	ctx, cancel := c.requestCtx(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(HeaderAPIKey, c.apiKey)
-	req.Header.Set(HeaderCliClient, "pigcloud-cli/"+Version)
-	req.Header.Set(HeaderCliLang, config.GetLanguage())
+	c.setCommonHeaders(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -1403,27 +1509,26 @@ type TeeAttestationResponse struct {
 	Enabled     bool `json:"enabled"`
 	Available   bool `json:"available"`
 	Attestation struct {
-		EnclavePublicKey      string `json:"enclave_public_key"`
-		EnclavePublicKeyKyber string `json:"enclave_public_key_kyber"`
-		AttestationMode       string `json:"attestation_mode"`
-		SgxQuote              string `json:"sgx_quote"`
-		Mrenclave             string `json:"mrenclave"`
-		VerificationStatus    string `json:"verification_status"`
+		EnclavePublicKey        string `json:"enclave_public_key"`
+		EnclavePublicKeyKyber   string `json:"enclave_public_key_kyber"`
+		EnclaveSigningPkEd25519 string `json:"enclave_signing_pk_ed25519"`
+		EnclaveSigningPkMldsa   string `json:"enclave_signing_pk_mldsa"`
+		AttestationMode         string `json:"attestation_mode"`
+		SgxQuote                string `json:"sgx_quote"`
+		Mrenclave               string `json:"mrenclave"`
+		VerificationStatus      string `json:"verification_status"`
 	} `json:"attestation"`
 }
 
 func (c *Client) FetchTeeAttestation(ctx context.Context) (*TeeAttestationResponse, error) {
-	endpoint := c.endpoint
-	if strings.Contains(endpoint, "?") {
-		endpoint += "&action=tee-attestation"
-	} else {
-		endpoint += "?action=tee-attestation"
-	}
+	endpoint := c.actionEndpoint("tee-attestation")
+	ctx, cancel := c.requestCtx(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set(HeaderAPIKey, c.apiKey)
+	c.setCommonHeaders(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err

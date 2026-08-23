@@ -299,12 +299,12 @@ The script downloads the right build for your platform, verifies its SHA-256, an
 
 Download the appropriate binary for your platform from the [releases page](https://github.com/pigtech-de/pigcloud-cli/releases).
 
-Each release contains two binaries: ` + "`pigcloud`" + ` (full name) and ` + "`pc`" + ` (shorthand alias).
+Every archive contains two binaries: ` + "`pigcloud`" + ` (full name) and ` + "`pc`" + ` (shorthand alias), named exactly that inside the archive (` + "`pigcloud.exe`" + ` and ` + "`pc.exe`" + ` on Windows).
 
 #### Linux / macOS
 
 ` + "```bash" + `
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-{{.Version}}-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/download/v{{.Version}}/pigcloud-{{.Version}}-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ` + "```" + `
@@ -313,7 +313,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ` + "```powershell" + `
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-{{.Version}}-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/download/v{{.Version}}/pigcloud-{{.Version}}-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -502,8 +502,8 @@ bug reports and feature requests go to
 [pigcloud-issues](https://github.com/pigtech-de/pigcloud-issues/issues).
 
 The source is available under the
-[PolyForm Internal Use License 1.0.0](LICENSE): you may read, audit, and build
-it for your own internal or personal use. Any other use, including
-redistribution, needs written permission from PigTech. Official binaries are
-provided under the [PigCloud Terms of Service](https://pigtech.de/terms/).
+[PolyForm Shield License 1.0.0](LICENSE): you may read, audit, build, and use
+it for any purpose except providing a product that competes with PigCloud.
+Official binaries are provided under the
+[PigCloud Terms of Service](https://pigtech.de/terms/).
 `

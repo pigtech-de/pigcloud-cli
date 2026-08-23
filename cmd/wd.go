@@ -3,9 +3,10 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
+
+	"github.com/spf13/cobra"
 )
 
 var pwdCmd = &cobra.Command{

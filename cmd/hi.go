@@ -3,10 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/config"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var welcomeCmd = &cobra.Command{

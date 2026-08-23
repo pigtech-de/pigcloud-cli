@@ -64,13 +64,17 @@ checksums:
 
 release: build-all
 	@echo "Creating release archives..."
-	@cd $(DIST) && tar -czf pigcloud-$(VERSION)-linux-amd64.tar.gz pigcloud-linux-amd64 pc-linux-amd64 2>/dev/null || echo "Skipping Linux AMD64 archive"
-	@cd $(DIST) && tar -czf pigcloud-$(VERSION)-linux-arm64.tar.gz pigcloud-linux-arm64 pc-linux-arm64 2>/dev/null || echo "Skipping Linux ARM64 archive"
-	@cd $(DIST) && tar -czf pigcloud-$(VERSION)-darwin-amd64.tar.gz pigcloud-darwin-amd64 pc-darwin-amd64 2>/dev/null || echo "Skipping macOS AMD64 archive"
-	@cd $(DIST) && tar -czf pigcloud-$(VERSION)-darwin-arm64.tar.gz pigcloud-darwin-arm64 pc-darwin-arm64 2>/dev/null || echo "Skipping macOS ARM64 archive"
-	@cd $(DIST) && zip -q pigcloud-$(VERSION)-windows-amd64.zip pigcloud-windows-amd64.exe pc-windows-amd64.exe 2>/dev/null || echo "Skipping Windows AMD64 archive"
-	@cd $(DIST) && zip -q pigcloud-$(VERSION)-windows-arm64.zip pigcloud-windows-arm64.exe pc-windows-arm64.exe 2>/dev/null || echo "Skipping Windows ARM64 archive"
-	@cd $(DIST) && sha256sum *.tar.gz *.zip 2>/dev/null > checksums.txt || echo "Checksums generated"
+	@cd $(DIST) && for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do \
+		rm -rf stage && mkdir stage && \
+		install -m 755 pigcloud-$$plat stage/pigcloud && install -m 755 pc-$$plat stage/pc && \
+		tar -czf pigcloud-$(VERSION)-$$plat.tar.gz -C stage pigcloud pc \
+		|| echo "Skipping $$plat archive"; done
+	@cd $(DIST) && for plat in windows-amd64 windows-arm64; do \
+		rm -rf stage && mkdir stage && \
+		install -m 755 pigcloud-$$plat.exe stage/pigcloud.exe && install -m 755 pc-$$plat.exe stage/pc.exe && \
+		(cd stage && zip -q ../pigcloud-$(VERSION)-$$plat.zip pigcloud.exe pc.exe) \
+		|| echo "Skipping $$plat archive"; done
+	@cd $(DIST) && rm -rf stage && sha256sum *.tar.gz *.zip 2>/dev/null > checksums.txt || echo "Checksums generated"
 	@echo "Release archives created in $(DIST)/"
 
 help:

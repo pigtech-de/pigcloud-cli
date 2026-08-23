@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pigcloud/internal/fsutil"
 )
 
 const syncPathsFile = "sync-paths.json"
@@ -17,7 +18,7 @@ func syncPathKey(owner, remotePath string) string {
 }
 
 func LoadSyncPaths() SyncPaths {
-	data, err := os.ReadFile(filepath.Join(configDir(), syncPathsFile))
+	data, err := os.ReadFile(filepath.Join(ConfigDir(), syncPathsFile))
 	if err != nil {
 		return make(SyncPaths)
 	}
@@ -33,9 +34,9 @@ func (sp SyncPaths) Save() error {
 	if err != nil {
 		return err
 	}
-	dir := configDir()
+	dir := ConfigDir()
 	os.MkdirAll(dir, 0700)
-	return os.WriteFile(filepath.Join(dir, syncPathsFile), data, 0600)
+	return fsutil.WriteFileAtomic(filepath.Join(dir, syncPathsFile), data, 0600)
 }
 
 func (sp SyncPaths) GetSyncDir(owner, remotePath string) string {
@@ -59,7 +60,7 @@ func DefaultSyncDir(owner, remotePath string) string {
 	key := NormalizeRemotePath(remotePath)
 	legacyHash := sha256.Sum256([]byte(key))
 	legacyID := hex.EncodeToString(legacyHash[:8])
-	for _, base := range []string{configDir(), dataDir()} {
+	for _, base := range []string{ConfigDir(), DataDir()} {
 		dir := filepath.Join(base, "sync-data", legacyID)
 		if _, err := os.Stat(dir); err == nil {
 			if o := SyncDirOwner(dir); o == "" || o == owner {
@@ -68,7 +69,7 @@ func DefaultSyncDir(owner, remotePath string) string {
 		}
 	}
 	pathHash := sha256.Sum256([]byte(owner + "\n" + key))
-	return filepath.Join(dataDir(), "sync-data", hex.EncodeToString(pathHash[:8]))
+	return filepath.Join(DataDir(), "sync-data", hex.EncodeToString(pathHash[:8]))
 }
 
 func NormalizeRemotePath(remotePath string) string {

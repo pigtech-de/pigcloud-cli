@@ -2,19 +2,17 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var vfLimit int
@@ -57,12 +55,10 @@ type verifyResult struct {
 }
 
 func runVerify(searchPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
-	if !cmdutil.EnsureNamesReadable() {
+	if !e2ee.EnsureNamesReadable() {
 		return
 	}
 
@@ -72,14 +68,7 @@ func runVerify(searchPath string) {
 		"source": resolvedPath,
 		"depth":  "50",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-		}
-		cmdutil.AddPathTokens(treeOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(treeOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	_, tree := cmdutil.ExecuteCommand[api.TreePayload](ctx, "tr", treeOpts, ExitWithError)
 	decryptTreeEntries(tree.Entries)
 
@@ -126,32 +115,23 @@ func runVerify(searchPath string) {
 		}
 
 		perFileOpts := map[string]string{}
-		if cmdutil.HasE2EEKeys() {
-			fileTrimmed := strings.TrimPrefix(remotePath, "/")
-			var filePaths []string
-			if fileTrimmed != "" {
-				filePaths = append(filePaths, fileTrimmed)
-				for p := filepath.Dir(fileTrimmed); p != "." && p != ""; p = filepath.Dir(p) {
-					filePaths = append(filePaths, p)
-				}
-			}
-			cmdutil.AddPathTokens(perFileOpts, filePaths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(perFileOpts, remotePath, e2ee.SelfAndAncestors, ExitWithError)
 
 		res := verifyResult{Path: remotePath, Status: "ok"}
 		data, dlResult, err := client.DownloadToMemory(ctx, remotePath, perFileOpts)
+		gateErr := e2ee.RequireEncryptedDownload(dlResult)
 		switch {
 		case err != nil:
 			res.Status = "fail"
 			res.Error = "download: " + err.Error()
-		case dlResult == nil || !dlResult.E2EE:
-			res.Status = "unsigned"
-			res.Error = "pre-E2EE file, no signature to verify"
+		case gateErr != nil:
+			res.Status = "fail"
+			res.Error = gateErr.Error()
 		case dlResult.SignatureEd25519 == "" && dlResult.TEESignatureEd25519 == "":
 			res.Status = "unsigned"
 			res.Error = "uploaded before the signing rollout"
 		default:
-			if verr := cmdutil.VerifyDownloadIntegrity(bytes.NewReader(data), dlResult); verr != nil {
+			if verr := e2ee.VerifyDownloadIntegrity(bytes.NewReader(data), dlResult); verr != nil {
 				res.Status = "fail"
 				res.Error = verr.Error()
 			}

@@ -2,19 +2,18 @@ package cmd
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var diLocal string
@@ -65,25 +64,13 @@ func init() {
 }
 
 func runDiff(filePath, versionA, versionB string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(filePath)
 
 	pathOpts := map[string]string{}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(pathOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(pathOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	displayA, displayB := versionA, versionB
 	if versionA != "" || versionB != "" {
@@ -133,9 +120,7 @@ func runDiff(filePath, versionA, versionB string) {
 			output.PrintError("Failed to download " + label + ": " + err.Error())
 			ExitWithError()
 		}
-		if dlResult != nil && dlResult.E2EE {
-			decryptDownloadedFile(tmpPath, dlResult)
-		}
+		decryptDownloadedFile(tmpPath, dlResult)
 		lines, err := readLines(tmpPath)
 		if err != nil {
 			output.PrintError("Failed to read " + label + ": " + err.Error())

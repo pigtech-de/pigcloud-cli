@@ -9,11 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/filetypes"
+	"pigcloud/internal/tree"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -111,7 +113,7 @@ func getDirectoryListing(dirPath string) []api.ListEntry {
 
 	options := map[string]string{"source": dirPath}
 
-	if cmdutil.HasE2EEKeys() {
+	if e2ee.HasE2EEKeys() {
 		trimmed := strings.TrimPrefix(dirPath, "/")
 		var paths []string
 		if trimmed != "" {
@@ -121,13 +123,19 @@ func getDirectoryListing(dirPath string) []api.ListEntry {
 			}
 		}
 		noExit := func() {}
-		tokensJSON := cmdutil.ComputePathTokensForPaths(paths, noExit)
-		if tokensJSON != "" {
-			options["path_tokens"] = tokensJSON
+		canonical, legacy := e2ee.ComputePathTokenMaps(paths, noExit)
+		if canonical != "" {
+			options["path_tokens"] = canonical
+		}
+		if legacy != "" {
+			options["path_tokens_legacy"] = legacy
 		}
 	}
 
 	client := api.NewClient()
+	if e2ee.HasE2EEKeys() {
+		addCompletionScope(options, dirPath)
+	}
 	resp, err := client.Execute(context.Background(), "ls", options)
 	if err != nil || !resp.Success {
 		return nil
@@ -141,7 +149,7 @@ func getDirectoryListing(dirPath string) []api.ListEntry {
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
 		if entry.E2EEDisplayName != "" {
-			entry.Name = cmdutil.DecryptE2EEName(entry.E2EEDisplayName)
+			entry.Name = e2ee.DecryptE2EEName(entry.E2EEDisplayName)
 		}
 	}
 
@@ -151,4 +159,37 @@ func getDirectoryListing(dirPath string) []api.ListEntry {
 	}
 
 	return payload.Entries
+}
+
+func addCompletionScope(options map[string]string, dirPath string) {
+	noExit := func() {}
+	_, priv := e2ee.GetKeyPair(noExit)
+	if priv == nil {
+		return
+	}
+	parentKey := e2ee.GetParentKey(noExit)
+	if parentKey == nil {
+		return
+	}
+	built, err := tree.Load(context.Background(), api.NewClient(), tree.Keys{Priv: priv, ParentKey: parentKey})
+	if err != nil {
+		return
+	}
+	parentID := ""
+	if trimmed := strings.Trim(dirPath, "/"); trimmed != "" {
+		node, err := built.Resolve(trimmed)
+		if err != nil || node == nil || !node.IsDir {
+			return
+		}
+		parentID = node.ID
+	}
+	ids := []string{}
+	for _, child := range built.Children(parentID) {
+		ids = append(ids, child.ID)
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return
+	}
+	options["scope_node_ids"] = string(encoded)
 }

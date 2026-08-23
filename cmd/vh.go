@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var vhCmd = &cobra.Command{
@@ -94,9 +96,7 @@ func init() {
 }
 
 func runVersionList(filePath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(filePath)
@@ -104,17 +104,7 @@ func runVersionList(filePath string) {
 		"source": resolvedPath,
 		"mode":   "list",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(vhListOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(vhListOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 	resp, payload := cmdutil.ExecuteCommand[api.VersionListPayload](ctx, "vh", vhListOpts, ExitWithError)
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
@@ -146,9 +136,7 @@ func runVersionList(filePath string) {
 }
 
 func runVersionRestore(filePath, versionID string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(filePath)
@@ -157,17 +145,7 @@ func runVersionRestore(filePath, versionID string) {
 		"mode":       "restore",
 		"version-id": versionID,
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(vhRestoreOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(vhRestoreOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 	_, payload := cmdutil.ExecuteCommand[api.VersionActionPayload](ctx, "vh", vhRestoreOpts, ExitWithError)
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
@@ -207,9 +185,7 @@ func runVersionDelete(versionID string) {
 }
 
 func runVersionDownload(filePath, versionID, localPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(filePath)
@@ -218,17 +194,7 @@ func runVersionDownload(filePath, versionID, localPath string) {
 		"mode":       "download",
 		"version-id": versionID,
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	fileName := filepath.Base(resolvedPath)
 	if fileName == "" || fileName == "/" {
@@ -263,9 +229,7 @@ func runVersionDownload(filePath, versionID, localPath string) {
 		ExitWithError()
 	}
 
-	if dlResult != nil && dlResult.E2EE {
-		decryptDownloadedFile(localPath, dlResult)
-	}
+	decryptDownloadedFile(localPath, dlResult)
 
 	finalStat, _ := os.Stat(localPath)
 	var size int64
@@ -305,17 +269,7 @@ func runVersionPrune(filePath string) {
 		"mode":   "prune",
 		"keep":   fmt.Sprintf("%d", vhPruneKeep),
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.VersionPrunePayload](ctx, "vh", options, ExitWithError)
 

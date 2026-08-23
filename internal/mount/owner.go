@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pigcloud/internal/fsutil"
 )
 
 const ownerFileName = "owner.json"
@@ -48,5 +49,5 @@ func ClaimSyncDir(syncDir, ownerID string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ownerFilePath(syncDir), data, 0600)
+	return fsutil.WriteFileAtomic(ownerFilePath(syncDir), data, 0600)
 }

@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -73,14 +75,14 @@ func runUnlock() {
 			output.PrintError("No password on stdin")
 			ExitWithError()
 		}
-		cmdutil.SetSuppliedPassword([]byte(pw))
+		e2ee.SetSuppliedPassword([]byte(pw))
 	}
 
-	pub, priv := cmdutil.GetKeyPair(ExitWithError)
-	nameKey := cmdutil.GetNameKey(ExitWithError)
-	signPub, signPriv := cmdutil.GetSigningKeysIfAvailable(ExitWithError)
+	pub, priv := e2ee.GetKeyPair(ExitWithError)
+	nameKey := e2ee.GetNameKey(ExitWithError)
+	signPub, signPriv := e2ee.GetSigningKeysIfAvailable(ExitWithError)
 
-	if err := cmdutil.StartAgentForKeys(pub, priv, nameKey, signPub, signPriv, ttl); err != nil {
+	if err := e2ee.StartAgentForKeys(pub, priv, nameKey, signPub, signPriv, ttl); err != nil {
 		output.PrintError("Failed to start agent: " + err.Error())
 		ExitWithError()
 	}
@@ -104,8 +106,8 @@ func DeriveAndStartAgent(pub *crypto.PublicKeySet, priv *crypto.PrivateKeySet) {
 	if err != nil {
 		return
 	}
-	signPub, signPriv := cmdutil.GetSigningKeysIfAvailable(func() {})
-	cmdutil.StartAgentForKeys(pub, priv, nameKey, signPub, signPriv, time.Hour)
+	signPub, signPriv := e2ee.GetSigningKeysIfAvailable(func() {})
+	e2ee.StartAgentForKeys(pub, priv, nameKey, signPub, signPriv, time.Hour)
 }
 
 func formatTTL(d time.Duration) string {

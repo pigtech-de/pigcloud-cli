@@ -1,16 +1,14 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"strings"
+
+	"pigcloud/internal/api"
+	"pigcloud/internal/cmdutil"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
 )
 
 var whoamiCmd = &cobra.Command{
@@ -30,9 +28,7 @@ func init() {
 }
 
 func runWhoami() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.WhoamiPayload](ctx, "wh", map[string]string{}, ExitWithError)

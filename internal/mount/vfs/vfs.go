@@ -1,22 +1,21 @@
 package vfs
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"pigcloud/internal/api"
-	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/crypto"
 	"pigcloud/internal/mount/cache"
+	"pigcloud/internal/mount/mlog"
+	"pigcloud/internal/mount/transfer"
 )
 
 var (
@@ -44,14 +43,17 @@ type VFS struct {
 	SigningPublicKey  *crypto.SigningPublicKeySet
 	SigningPrivateKey *crypto.SigningPrivateKeySet
 
-	DirTTL   time.Duration
-	ReadOnly bool
+	DirTTL time.Duration
+	readOnly bool
 
 	Online    bool
 	nodesByID map[int64]*Node
 	idMu      sync.RWMutex
 
 	dlSem chan struct{}
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	statfsMu    sync.Mutex
 	statfsUsed  int64
@@ -91,12 +93,20 @@ func New(remoteBase string, cacheDB *cache.DB, store *cache.Store, evictor *cach
 		nodesByID:         make(map[int64]*Node),
 		dlSem:             make(chan struct{}, 4),
 	}
+	vfs.ctx, vfs.cancel = context.WithCancel(context.Background())
 
 	if evictor != nil {
 		evictor.SetHooks(vfs.evictInUse, vfs.evictClear)
 	}
 
 	return vfs
+}
+
+func (v *VFS) SetReadOnly(ro bool) {
+	v.readOnly = ro
+	if v.Cache != nil {
+		v.Cache.SetWritebackDisabled(ro)
+	}
 }
 
 func (v *VFS) evictInUse(id int64) bool {
@@ -179,29 +189,97 @@ func (v *VFS) Open(node *Node) error {
 		node.Mu.Unlock()
 		<-ch
 		node.Mu.RLock()
-		cached := node.Cached
+		cached, cause := node.Cached, node.DownloadErr
 		node.Mu.RUnlock()
-		if !cached {
-			return fmt.Errorf("download failed (waited)")
+		if cached {
+			return nil
 		}
-		return nil
+		node.Mu.Lock()
+		node.OpenCount--
+		node.Mu.Unlock()
+		if cause != nil {
+			return cause
+		}
+		return fmt.Errorf("download failed (waited)")
 	}
 
 	node.Downloading = true
 	node.DownloadCh = make(chan struct{})
 	node.Mu.Unlock()
 
-	err := v.downloadAndCache(node)
+	var err error
+	defer func() { v.finishDownload(node, err) }()
 
+	err = v.downloadFailureBarrier(node)
+	if err == nil {
+		err = v.downloadAndCache(node)
+		v.settleDownloadFailure(node, err)
+	}
+
+	return err
+}
+
+func (v *VFS) finishDownload(node *Node, err error) {
 	node.Mu.Lock()
 	node.Downloading = false
+	node.DownloadErr = err
 	close(node.DownloadCh)
 	if err != nil {
 		node.OpenCount--
 	}
 	node.Mu.Unlock()
+}
 
-	return err
+func (v *VFS) downloadFailureBarrier(node *Node) error {
+	if node.ID == 0 || v.Cache == nil {
+		return nil
+	}
+	f, err := v.Cache.GetSyncFailure(node.ID, cache.FailureDownload)
+	if err != nil || f == nil {
+		return nil
+	}
+	if !f.Permanent && time.Now().Unix() >= f.NextRetryAt {
+		return nil
+	}
+	if f.LastError == "" {
+		return fmt.Errorf("download withheld after %d failed attempt(s)", f.Attempts)
+	}
+	return errors.New(f.LastError)
+}
+
+func (v *VFS) settleDownloadFailure(node *Node, err error) {
+	if node.ID == 0 || v.Cache == nil {
+		return
+	}
+	if err == nil {
+		v.Cache.ClearSyncFailure(node.ID, cache.FailureDownload)
+		v.Cache.SetSyncStatus(node.ID, cache.StatusSynced, "")
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	attempts := 1
+	if prev, gerr := v.Cache.GetSyncFailure(node.ID, cache.FailureDownload); gerr == nil && prev != nil {
+		attempts = prev.Attempts + 1
+	}
+	f := &cache.SyncFailure{
+		InodeID:   node.ID,
+		Kind:      cache.FailureDownload,
+		Permanent: cache.IsPermanent(err),
+		Attempts:  attempts,
+		LastError: err.Error(),
+	}
+	if !f.Permanent {
+		f.NextRetryAt = time.Now().Add(cache.TransferBackoff(attempts)).Unix()
+	}
+	v.Cache.RecordSyncFailure(f)
+	if f.Permanent {
+		v.Cache.SetSyncStatus(node.ID, cache.StatusFailed, err.Error())
+		mlog.Errorf("vfs: %s will not be retried: %v", node.RemotePath, err)
+		return
+	}
+	mlog.Warnf("vfs: %s: %v (next attempt in %v)", node.RemotePath, err, cache.TransferBackoff(attempts))
 }
 
 func (v *VFS) Read(node *Node, off int64, size int) ([]byte, error) {
@@ -227,7 +305,7 @@ func (v *VFS) Read(node *Node, off int64, size int) ([]byte, error) {
 }
 
 func (v *VFS) Write(node *Node, off int64, data []byte) (int, error) {
-	if v.ReadOnly {
+	if v.readOnly {
 		return 0, ErrReadOnly
 	}
 	node.Mu.Lock()
@@ -276,12 +354,16 @@ func (v *VFS) Flush(node *Node) error {
 	}
 
 	node.Mu.Lock()
+	superseded := node.ContentHash
 	node.ContentHash = hash
 	node.Cached = true
 	node.Mu.Unlock()
 
 	v.Cache.MarkCached(node.ID, hash)
 	v.Cache.MarkDirty(node.ID)
+	if superseded != hash {
+		cache.ReleaseBlob(v.Cache, v.Store, superseded, node.ID)
+	}
 
 	ok, reason := ValidateFile(node.Name, node.Size)
 	if !ok {
@@ -311,7 +393,7 @@ func (v *VFS) Release(node *Node) error {
 }
 
 func (v *VFS) Create(parent *Node, name string) (*Node, error) {
-	if v.ReadOnly {
+	if v.readOnly {
 		return nil, ErrReadOnly
 	}
 	if !parent.IsDir {
@@ -359,14 +441,13 @@ func (v *VFS) Create(parent *Node, name string) (*Node, error) {
 	}
 	node.ID = id
 
-	parent.AddChild(node)
-	v.trackNode(node)
+	v.AttachChild(parent, node)
 
 	return node, nil
 }
 
 func (v *VFS) Mkdir(parent *Node, name string) (*Node, error) {
-	if v.ReadOnly {
+	if v.readOnly {
 		return nil, ErrReadOnly
 	}
 	if !parent.IsDir {
@@ -411,14 +492,13 @@ func (v *VFS) Mkdir(parent *Node, name string) (*Node, error) {
 	}
 	node.ID = id
 
-	parent.AddChild(node)
-	v.trackNode(node)
+	v.AttachChild(parent, node)
 
 	return node, nil
 }
 
 func (v *VFS) Unlink(parent *Node, name string) error {
-	if v.ReadOnly {
+	if v.readOnly {
 		return ErrReadOnly
 	}
 	child := parent.GetChild(name)
@@ -458,7 +538,7 @@ func (v *VFS) Unlink(parent *Node, name string) error {
 }
 
 func (v *VFS) Rmdir(parent *Node, name string) error {
-	if v.ReadOnly {
+	if v.readOnly {
 		return ErrReadOnly
 	}
 	child := parent.GetChild(name)
@@ -500,7 +580,7 @@ func (v *VFS) Rmdir(parent *Node, name string) error {
 }
 
 func (v *VFS) Rename(oldParent *Node, oldName string, newParent *Node, newName string) error {
-	if v.ReadOnly {
+	if v.readOnly {
 		return ErrReadOnly
 	}
 	child := oldParent.GetChild(oldName)
@@ -627,7 +707,7 @@ func (v *VFS) renameLocalOnlyFile(oldParent, child *Node, oldName string, newPar
 }
 
 func (v *VFS) Truncate(node *Node, size int64) error {
-	if v.ReadOnly {
+	if v.readOnly {
 		return ErrReadOnly
 	}
 	node.Mu.Lock()
@@ -727,7 +807,7 @@ func (v *VFS) populateDir(parent *Node) error {
 	resp, err := v.Client.Execute(context.Background(), "ls", options)
 	if err != nil {
 		v.Online = false
-		log.Printf("vfs: ls %q failed: %v", source, err)
+		mlog.Errorf("vfs: ls %q failed: %v", source, err)
 		return fmt.Errorf("ls API call: %w", err)
 	}
 	v.Online = true
@@ -781,6 +861,8 @@ func (v *VFS) populateDir(parent *Node) error {
 			size := int64(0)
 			if entry.PlaintextSize != nil {
 				size = *entry.PlaintextSize
+			} else if dbInode, _ := v.Cache.GetInodeByPath(childPath); dbInode != nil {
+				size = dbInode.Size
 			}
 			mtime := time.Now()
 			if entry.Modified != nil {
@@ -812,78 +894,26 @@ func (v *VFS) populateDir(parent *Node) error {
 	return nil
 }
 
+func (v *VFS) Shutdown() {
+	if v.cancel != nil {
+		v.cancel()
+	}
+}
+
 func (v *VFS) downloadAndCache(node *Node) error {
 	v.dlSem <- struct{}{}
 	defer func() { <-v.dlSem }()
 
-	log.Printf("vfs: downloading %s (%d bytes)", node.RemotePath, node.Size)
+	mlog.Debugf("vfs: downloading %s (%d bytes)", node.RemotePath, node.Size)
 
-	opts := map[string]string{}
-	v.addPathTokens(opts, []string{node.RemotePath})
-
-	var encryptedData []byte
-	var dlResult *api.DownloadResult
-
-	for attempt := 0; attempt < 4; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-
-		var err error
-		encryptedData, dlResult, err = v.Client.DownloadToMemory(
-			ctx, "/"+node.RemotePath, opts)
-		cancel()
-
-		if err == nil {
-			break
-		}
-
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "Try again") || strings.Contains(errMsg, "too many") ||
-			strings.Contains(errMsg, "Too many") || strings.Contains(errMsg, "rate") {
-			delay := time.Duration(15*(attempt+1)) * time.Second
-			log.Printf("vfs: rate limited downloading %s, retrying in %v (attempt %d)", node.RemotePath, delay, attempt+1)
-			time.Sleep(delay)
-			continue
-		}
-
-		log.Printf("vfs: download failed for %s: %v", node.RemotePath, err)
-		return fmt.Errorf("download: %w", err)
+	fetcher := transfer.Fetcher{
+		Client: v.Client,
+		Keys:   transfer.Keys{NameKey: v.NameKey, PrivateKey: v.PrivateKey, SigningKey: v.SigningPrivateKey},
+		Tag:    "vfs",
 	}
-
-	if encryptedData == nil || dlResult == nil {
-		return fmt.Errorf("download: exhausted retries")
-	}
-
-	if !dlResult.E2EE || dlResult.SealedKey == "" {
-		return fmt.Errorf("non-E2EE download not supported")
-	}
-
-	sealedKeyBytes, err := base64.StdEncoding.DecodeString(dlResult.SealedKey)
+	plaintext, dlResult, err := fetcher.Fetch(v.ctx, node.RemotePath)
 	if err != nil {
-		return fmt.Errorf("decode sealed key: %w", err)
-	}
-
-	dataKey, err := crypto.UnsealDataKey(sealedKeyBytes, v.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("unseal data key: %w", err)
-	}
-
-	var encMeta crypto.EncryptionMetadata
-	if dlResult.EncryptionMeta != "" {
-		metaBytes, err := base64.StdEncoding.DecodeString(dlResult.EncryptionMeta)
-		if err != nil {
-			return fmt.Errorf("decode encryption meta: %w", err)
-		}
-		if err := json.Unmarshal(metaBytes, &encMeta); err != nil {
-			return fmt.Errorf("parse encryption meta: %w", err)
-		}
-	}
-
-	if err := cmdutil.VerifyDownloadIntegrityWithSigningKey(bytes.NewReader(encryptedData), dlResult, v.SigningPrivateKey); err != nil {
-		return fmt.Errorf("verify: %w", err)
-	}
-	plaintext, err := crypto.DecryptBytes(encryptedData, dataKey, &encMeta)
-	if err != nil {
-		return fmt.Errorf("decrypt: %w", err)
+		return err
 	}
 
 	hash, err := v.Store.Put(plaintext)
@@ -900,6 +930,7 @@ func (v *VFS) downloadAndCache(node *Node) error {
 	node.Mu.Unlock()
 
 	v.Cache.MarkCached(node.ID, hash)
+	v.Cache.SetInodeSize(node.ID, int64(len(plaintext)))
 	v.Evictor.RunIfNeeded()
 
 	return nil
@@ -942,31 +973,21 @@ func (v *VFS) AddPathTokensPublic(options map[string]string, paths []string) {
 }
 
 func (v *VFS) addPathTokens(options map[string]string, paths []string) {
-	tokens := make(map[string]string, len(paths))
+	var expanded []string
 	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		parts := strings.Split(p, "/")
-		current := ""
-		for _, part := range parts {
-			if current == "" {
-				current = part
-			} else {
-				current = current + "/" + part
-			}
-			token, err := crypto.ComputePathToken(v.NameKey, current)
-			if err != nil {
-				continue
-			}
-			tokens[current] = fmt.Sprintf("%x", token)
-		}
+		expanded = append(expanded, crypto.PathTokenPaths(p, crypto.PathTokenSelfAndAncestors)...)
 	}
-	if len(tokens) > 0 {
-		data, err := json.Marshal(tokens)
-		if err == nil {
-			options["path_tokens"] = string(data)
-		}
+	crypto.AddPathTokenOptions(options, v.NameKey, expanded)
+}
+
+func (v *VFS) AttachChild(parent, child *Node) {
+	parent.AddChild(child)
+	v.trackNode(child)
+}
+
+func (v *VFS) DetachChild(parent *Node, name string) {
+	if child := parent.RemoveChild(name); child != nil {
+		v.untrackNode(child)
 	}
 }
 

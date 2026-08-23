@@ -3,16 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
-	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -58,13 +57,11 @@ func init() {
 }
 
 func runRm(targets []string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	for _, target := range targets {
-		if isGlobArg(target) {
+		if cmdutil.IsGlobArg(target) {
 			runRmGlob(ctx, target)
 		} else {
 			runRmSingle(ctx, target)
@@ -73,7 +70,7 @@ func runRm(targets []string) {
 }
 
 func runRmGlob(ctx context.Context, pattern string) {
-	matches := expandRemoteGlob(ctx, pattern)
+	matches := cmdutil.ExpandRemoteGlob(ctx, pattern, ExitWithError)
 	if len(matches) == 0 {
 		output.PrintError("No matches for pattern: " + pattern)
 		ExitWithError()
@@ -103,7 +100,7 @@ func runRmGlob(ctx context.Context, pattern string) {
 
 	options := map[string]string{
 		"source":       cmdutil.ResolvePath(pattern),
-		"glob-matches": globMatchIDsJSON(matches),
+		"glob-matches": cmdutil.GlobMatchIDsJSON(matches),
 	}
 	if rmPermanent {
 		options["permanent"] = "true"
@@ -144,17 +141,7 @@ func runRmSingle(ctx context.Context, targetPath string) {
 		options["dry-run"] = "true"
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.RemovePayload](ctx, "rm", options, ExitWithError)
 

@@ -117,6 +117,12 @@ func DecryptSigningPrivateKeys(enc *EncryptedSigningPrivateKeySet, pdk []byte) (
 	if len(pdk) != KeySize {
 		return nil, fmt.Errorf("pdk must be %d bytes", KeySize)
 	}
+	if len(enc.Ed25519Nonce) != NonceSize {
+		return nil, fmt.Errorf("ed25519 nonce must be %d bytes, got %d", NonceSize, len(enc.Ed25519Nonce))
+	}
+	if len(enc.MldsaNonce) != NonceSize {
+		return nil, fmt.Errorf("mldsa nonce must be %d bytes, got %d", NonceSize, len(enc.MldsaNonce))
+	}
 	aead, err := chacha20poly1305.NewX(pdk)
 	if err != nil {
 		return nil, fmt.Errorf("aead init: %w", err)

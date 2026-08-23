@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strconv"
-	"strings"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -142,8 +142,7 @@ func init() {
 }
 
 func runChatList() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.ChatListPayload](ctx, "ch", map[string]string{
@@ -176,8 +175,7 @@ func runChatList() {
 }
 
 func runChatHistory(username string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := map[string]string{
@@ -211,7 +209,7 @@ func runChatHistory(username string) {
 		}
 	}
 	if needsKeys {
-		_, privKey = cmdutil.GetKeyPair(ExitWithError)
+		_, privKey = e2ee.GetKeyPair(ExitWithError)
 	}
 
 	for _, msg := range payload.Messages {
@@ -261,8 +259,7 @@ func runChatHistory(username string) {
 }
 
 func runChatSendMessage(username, message string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := encryptChatMessage(ctx, username, message)
@@ -279,8 +276,7 @@ func runChatSendMessage(username, message string) {
 }
 
 func runChatShareFile(username, filePath string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(filePath)
@@ -290,19 +286,14 @@ func runChatShareFile(username, filePath string) {
 	options["username"] = username
 	options["source"] = resolvedPath
 
-	if cmdutil.HasE2EEKeys() {
+	if e2ee.HasE2EEKeys() {
 		sealedKeys, _ := resealKeysAndNamesForRecipient(ctx, resolvedPath, username)
 		if sealedKeys != "" {
 			options["sealed_keys"] = sealedKeys
 		}
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.ChatSendPayload](ctx, "ch", options, ExitWithError)
 
@@ -314,8 +305,7 @@ func runChatShareFile(username, filePath string) {
 }
 
 func runChatDelete(messageIDStr string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	cmdutil.ExecuteCommand[api.ChatDeletePayload](ctx, "ch", map[string]string{
@@ -327,8 +317,7 @@ func runChatDelete(messageIDStr string) {
 }
 
 func runChatMarkRead(username string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	_, payload := cmdutil.ExecuteCommand[api.ChatMarkReadPayload](ctx, "ch", map[string]string{
@@ -348,8 +337,7 @@ func runChatMarkRead(username string) {
 }
 
 func runChatUnread() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.ChatUnreadPayload](ctx, "ch", map[string]string{
@@ -377,7 +365,7 @@ func runChatUnread() {
 }
 
 func encryptChatMessage(ctx context.Context, recipientUsername, plaintext string) map[string]string {
-	pubKey, _ := cmdutil.GetKeyPair(ExitWithError)
+	pubKey, _ := e2ee.GetKeyPair(ExitWithError)
 
 	client := api.NewClient()
 	pubkeyResp, err := client.FetchPublicKey(ctx, recipientUsername)

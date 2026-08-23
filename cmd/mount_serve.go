@@ -2,17 +2,20 @@ package cmd
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/crypto"
 	"pigcloud/internal/mount"
 	"pigcloud/internal/mount/cache"
+	"pigcloud/internal/mount/daemon"
+	"pigcloud/internal/mount/mlog"
+	"pigcloud/internal/mount/spawn"
+
+	"github.com/spf13/cobra"
 )
 
 var mountServeCmd = &cobra.Command{
@@ -26,36 +29,27 @@ var mountServeCmd = &cobra.Command{
 		pollSec, _ := cmd.Flags().GetInt("poll")
 		mode, _ := cmd.Flags().GetString("mode")
 		readOnly, _ := cmd.Flags().GetBool("read-only")
+		if lvl, ok := mlog.ParseLevel(cmd.Flags().Lookup("log-level").Value.String()); ok {
+			mlog.SetLevel(lvl)
+		}
 
 		raw, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "read keys: %v\n", err)
 			os.Exit(1)
 		}
-		var keys mount.SpawnKeys
+		var keys spawn.Keys
 		if err := json.Unmarshal(raw, &keys); err != nil {
 			fmt.Fprintf(os.Stderr, "parse keys: %v\n", err)
 			os.Exit(1)
 		}
 
-		pubBytes, err := hex.DecodeString(keys.PubHex)
-		if err != nil || len(pubBytes) != 32 {
-			os.Exit(1)
-		}
-		privBytes, err := hex.DecodeString(keys.PrivHex)
-		if err != nil || len(privBytes) != 32 {
-			os.Exit(1)
-		}
-		kyberPubBytes, err := hex.DecodeString(keys.KyberPubHex)
-		if err != nil || len(kyberPubBytes) != crypto.KyberPublicKeySize {
-			os.Exit(1)
-		}
-		kyberSeedBytes, err := hex.DecodeString(keys.KyberSeedHex)
-		if err != nil || len(kyberSeedBytes) != crypto.KyberSeedSize {
-			os.Exit(1)
-		}
-		nameBytes, err := hex.DecodeString(keys.NameKeyHex)
-		if err != nil {
+		pubBytes := crypto.DecodeHexKey(keys.PubHex, crypto.X25519KeySize)
+		privBytes := crypto.DecodeHexKey(keys.PrivHex, crypto.X25519KeySize)
+		kyberPubBytes := crypto.DecodeHexKey(keys.KyberPubHex, crypto.KyberPublicKeySize)
+		kyberSeedBytes := crypto.DecodeHexKey(keys.KyberSeedHex, crypto.KyberSeedSize)
+		nameBytes := crypto.DecodeHexKey(keys.NameKeyHex, crypto.NameKeySize)
+		if pubBytes == nil || privBytes == nil || kyberPubBytes == nil || kyberSeedBytes == nil || nameBytes == nil {
 			os.Exit(1)
 		}
 
@@ -77,7 +71,7 @@ var mountServeCmd = &cobra.Command{
 			mode = mount.ModeSync
 		}
 
-		cfg := &mount.DaemonConfig{
+		cfg := &daemon.Config{
 			MountPoint:        mountPoint,
 			RemotePath:        remotePath,
 			CacheSize:         cacheSizeBytes,
@@ -93,9 +87,9 @@ var mountServeCmd = &cobra.Command{
 
 		var serveErr error
 		if mode == mount.ModeVirtual {
-			serveErr = mount.ServeDaemon(cfg)
+			serveErr = daemon.ServeVirtual(cfg)
 		} else {
-			serveErr = mount.ServeSyncDaemon(cfg)
+			serveErr = daemon.ServeSync(cfg)
 		}
 
 		if serveErr != nil {
@@ -105,21 +99,12 @@ var mountServeCmd = &cobra.Command{
 	},
 }
 
-func decodeSigningKeys(keys mount.SpawnKeys) (*crypto.SigningPublicKeySet, *crypto.SigningPrivateKeySet) {
-	pubEd, err := hex.DecodeString(keys.SignPubEdHex)
-	if err != nil || len(pubEd) != crypto.Ed25519PKSize {
-		return nil, nil
-	}
-	privEd, err := hex.DecodeString(keys.SignPrivEdHex)
-	if err != nil || len(privEd) != crypto.Ed25519SKSize {
-		return nil, nil
-	}
-	pubMl, err := hex.DecodeString(keys.SignPubMlHex)
-	if err != nil || len(pubMl) != crypto.Mldsa44PKSize {
-		return nil, nil
-	}
-	privMl, err := hex.DecodeString(keys.SignPrivMlHex)
-	if err != nil || len(privMl) != crypto.Mldsa44SKSize {
+func decodeSigningKeys(keys spawn.Keys) (*crypto.SigningPublicKeySet, *crypto.SigningPrivateKeySet) {
+	pubEd := crypto.DecodeHexKey(keys.SignPubEdHex, crypto.Ed25519PKSize)
+	privEd := crypto.DecodeHexKey(keys.SignPrivEdHex, crypto.Ed25519SKSize)
+	pubMl := crypto.DecodeHexKey(keys.SignPubMlHex, crypto.Mldsa44PKSize)
+	privMl := crypto.DecodeHexKey(keys.SignPrivMlHex, crypto.Mldsa44SKSize)
+	if pubEd == nil || privEd == nil || pubMl == nil || privMl == nil {
 		return nil, nil
 	}
 	var edPub [crypto.Ed25519PKSize]byte
@@ -135,5 +120,6 @@ func init() {
 	mountServeCmd.Flags().Int("poll", 30, "")
 	mountServeCmd.Flags().String("mode", mount.ModeSync, "")
 	mountServeCmd.Flags().Bool("read-only", false, "")
+	mountServeCmd.Flags().String("log-level", "", "")
 	rootCmd.AddCommand(mountServeCmd)
 }

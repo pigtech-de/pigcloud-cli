@@ -2,20 +2,55 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"os/signal"
 	"path"
 	"regexp"
 	"strings"
+	"syscall"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var nodeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
+
+var rsToRoot bool
+
+type rootRestoreDecision int
+
+const (
+	restoreAbort rootRestoreDecision = iota
+	restoreAsk
+	restoreProceed
+)
+
+func restoreOptions(nodeID string, toRoot bool, parentKey []byte) map[string]string {
+	options := map[string]string{"node_id": nodeID}
+	if !toRoot {
+		return options
+	}
+	options["to_root"] = "1"
+	if sealed := e2ee.SealedRootParentB64(nodeID, parentKey); sealed != "" {
+		options["e2ee_sealed_parent"] = sealed
+	}
+	return options
+}
+
+func decideRootRestore(errorCode string, toRoot, interactive bool) rootRestoreDecision {
+	if toRoot {
+		return restoreProceed
+	}
+	if errorCode != "orphaned" || !interactive {
+		return restoreAbort
+	}
+	return restoreAsk
+}
 
 var restoreCmd = &cobra.Command{
 	Use:     "rs <path-or-node-id>",
@@ -36,13 +71,12 @@ pc rs abc123def456...           # Restore by node ID from 'pc tb' output`,
 }
 
 func init() {
+	restoreCmd.Flags().BoolVar(&rsToRoot, "to-root", false, "Restore to the account root when the original folder is gone")
 	rootCmd.AddCommand(restoreCmd)
 }
 
 func runRestore(arg string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	nodeID := arg
@@ -54,8 +88,55 @@ func runRestore(arg string) {
 		}
 	}
 
-	options := map[string]string{"node_id": nodeID}
-	_, payload := cmdutil.ExecuteCommand[api.RestorePayload](ctx, "rs", options, ExitWithError)
+	var rootParentKey []byte
+	if rsToRoot {
+		rootParentKey = e2ee.GetParentKey(ExitWithError)
+	}
+	options := restoreOptions(nodeID, rsToRoot, rootParentKey)
+
+	client := api.NewClient()
+	resp, err := client.Execute(ctx, "rs", options)
+	if err != nil {
+		output.PrintError("Request failed: " + err.Error())
+		ExitWithError()
+		return
+	}
+
+	if !resp.Success {
+		interactive := term.IsTerminal(int(syscall.Stdin)) && !GetJSONOutput() && !GetQuietOutput()
+		switch decideRootRestore(resp.ErrorCode, rsToRoot, interactive) {
+		case restoreAsk:
+			output.PrintWarning(resp.Message)
+			if !cmdutil.ConfirmAction("Restore it to the account root instead?", false) {
+				output.PrintInfo("Cancelled")
+				return
+			}
+			options = restoreOptions(nodeID, true, e2ee.GetParentKey(ExitWithError))
+			resp, err = client.Execute(ctx, "rs", options)
+			if err != nil {
+				output.PrintError("Request failed: " + err.Error())
+				ExitWithError()
+				return
+			}
+		case restoreAbort:
+			output.PrintError(resp.Message)
+			ExitWithError()
+			return
+		}
+	}
+
+	if !resp.Success {
+		output.PrintError(resp.Message)
+		ExitWithError()
+		return
+	}
+
+	var payload api.RestorePayload
+	if err := json.Unmarshal(resp.Raw, &payload); err != nil {
+		output.PrintError("Failed to parse response: " + err.Error())
+		ExitWithError()
+		return
+	}
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
 		return
@@ -89,7 +170,7 @@ func resolveTrashPath(ctx context.Context, input string) string {
 		item := &payload.Items[i]
 		name := item.Name
 		if item.E2EEDisplayName != "" {
-			name = cmdutil.DecryptE2EEName(item.E2EEDisplayName)
+			name = e2ee.DecryptE2EEName(item.E2EEDisplayName)
 		}
 		if name == target {
 			matches = append(matches, candidate{

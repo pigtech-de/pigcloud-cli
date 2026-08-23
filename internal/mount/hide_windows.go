@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-func hideDir(path string) {
+func HideDir(path string) {
 	p, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return
@@ -20,5 +20,5 @@ func hideDir(path string) {
 }
 
 func HideMetaDir(syncDir string) {
-	hideDir(filepath.Join(syncDir, ".pigcloud"))
+	HideDir(filepath.Join(syncDir, ".pigcloud"))
 }

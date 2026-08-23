@@ -1,14 +1,11 @@
 package cmd
 
 import (
-	"context"
-	"os"
-	"os/signal"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -33,7 +30,7 @@ pc fv rm /Documents      # Remove from favorites`,
 			runFavoriteList()
 			return
 		}
-		forEachExpandedPath(args, runFavoriteToggle)
+		cmdutil.ForEachExpandedPath(args, runFavoriteToggle, ExitWithError)
 	},
 }
 
@@ -52,7 +49,7 @@ var fvAddCmd = &cobra.Command{
 	Args:              cobra.MinimumNArgs(1),
 	ValidArgsFunction: completion.RemotePathCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
-		forEachExpandedPath(args, runFavoriteAdd)
+		cmdutil.ForEachExpandedPath(args, runFavoriteAdd, ExitWithError)
 	},
 }
 
@@ -62,7 +59,7 @@ var fvRmCmd = &cobra.Command{
 	Args:              cobra.MinimumNArgs(1),
 	ValidArgsFunction: completion.RemotePathCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
-		forEachExpandedPath(args, runFavoriteRemove)
+		cmdutil.ForEachExpandedPath(args, runFavoriteRemove, ExitWithError)
 	},
 }
 
@@ -72,17 +69,11 @@ func init() {
 }
 
 func runFavoriteToggle(path string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 	resolvedPath := cmdutil.ResolvePath(path)
 	options := map[string]string{"source": resolvedPath, "mode": "toggle"}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	_, payload := cmdutil.ExecuteCommand[api.FavoritePayload](ctx, "fv", options, ExitWithError)
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
 		return
@@ -95,8 +86,7 @@ func runFavoriteToggle(path string) {
 }
 
 func runFavoriteList() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 	options := map[string]string{"mode": "list"}
 	resp, payload := cmdutil.ExecuteCommand[api.FavoriteListPayload](ctx, "fv", options, ExitWithError)
@@ -104,7 +94,7 @@ func runFavoriteList() {
 	for i := range payload.Favorites {
 		fav := &payload.Favorites[i]
 		if fav.E2EEDisplayName != "" {
-			fav.Name = cmdutil.DecryptE2EEName(fav.E2EEDisplayName)
+			fav.Name = e2ee.DecryptE2EEName(fav.E2EEDisplayName)
 		}
 	}
 
@@ -126,17 +116,11 @@ func runFavoriteList() {
 }
 
 func runFavoriteAdd(path string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 	resolvedPath := cmdutil.ResolvePath(path)
 	options := map[string]string{"source": resolvedPath, "mode": "add"}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	_, payload := cmdutil.ExecuteCommand[api.FavoritePayload](ctx, "fv", options, ExitWithError)
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
 		return
@@ -145,17 +129,11 @@ func runFavoriteAdd(path string) {
 }
 
 func runFavoriteRemove(path string) {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 	resolvedPath := cmdutil.ResolvePath(path)
 	options := map[string]string{"source": resolvedPath, "mode": "remove"}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	_, payload := cmdutil.ExecuteCommand[api.FavoritePayload](ctx, "fv", options, ExitWithError)
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
 		return

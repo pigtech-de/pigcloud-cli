@@ -1,19 +1,16 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var cdCmd = &cobra.Command{
@@ -36,9 +33,7 @@ func init() {
 }
 
 func runCd(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -46,17 +41,7 @@ func runCd(targetPath string) {
 	options := map[string]string{
 		"source": resolvedPath,
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	client := api.NewClient()
 	resp, err := client.Execute(ctx, "cd", options)

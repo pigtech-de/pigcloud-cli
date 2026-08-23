@@ -1,18 +1,15 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -72,9 +69,7 @@ func init() {
 }
 
 func runLs(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -108,16 +103,13 @@ func runLs(targetPath string) {
 		}
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
+	if e2ee.HasE2EEKeys() {
+		e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
+		if lsRecursive {
+			addRecursiveListingScope(ctx, options, resolvedPath, lsAll)
+		} else {
+			addChildScope(ctx, options, resolvedPath)
 		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
 	}
 
 	resp, payload := cmdutil.ExecuteCommand[api.ListPayload](ctx, "ls", options, ExitWithError)
@@ -125,7 +117,7 @@ func runLs(targetPath string) {
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
 		if entry.E2EEDisplayName != "" {
-			entry.Name = cmdutil.DecryptE2EEName(entry.E2EEDisplayName)
+			entry.Name = e2ee.DecryptE2EEName(entry.E2EEDisplayName)
 			if entry.Type == "directory" {
 				entry.Path = "/" + entry.Name
 			}

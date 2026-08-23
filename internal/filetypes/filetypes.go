@@ -39,3 +39,11 @@ func TypeOf(ext string) string {
 func IsText(ext string) bool {
 	return TypeOf(ext) == "text"
 }
+
+func Extensions() []string {
+	out := make([]string, 0, len(typeMap))
+	for ext := range typeMap {
+		out = append(out, ext)
+	}
+	return out
+}

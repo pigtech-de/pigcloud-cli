@@ -6,18 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -67,9 +68,7 @@ func init() {
 }
 
 func runActivity() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := map[string]string{
@@ -236,6 +235,8 @@ func formatEventType(eventType string) string {
 		return color.GreenString("Login")
 	case "new_device_login":
 		return color.YellowString("New device login")
+	case "login_attempts_throttled":
+		return color.YellowString("Login attempts throttled")
 	case "password_change":
 		return color.YellowString("Password changed")
 	case "email_change":
@@ -278,10 +279,14 @@ func formatEventType(eventType string) string {
 		return "File copied"
 	case "file_restored":
 		return "File restored"
+	case "file_sanitized":
+		return "File sanitized"
 	case "folder_created":
 		return "Folder created"
 	case "trash_emptied":
 		return "Trash emptied"
+	case "versions_purged":
+		return "Versions purged"
 	case "recents_cleared":
 		return "Recents cleared"
 	case "share_sent":
@@ -294,6 +299,14 @@ func formatEventType(eventType string) string {
 		return color.RedString("Share rejected")
 	case "share_removed":
 		return color.YellowString("Share removed")
+	case "share_item_taken":
+		return color.YellowString("Item moved out of your share")
+	case "share_item_versions_dropped":
+		return color.YellowString("Version history dropped")
+	case "version_restored":
+		return color.CyanString("Version restored")
+	case "version_deleted":
+		return color.YellowString("Version deleted")
 	case "public_link_created":
 		return color.CyanString("Link created")
 	case "public_link_deleted":
@@ -302,6 +315,24 @@ func formatEventType(eventType string) string {
 		return color.HiBlackString("Link expired")
 	case "public_link_limit_reached":
 		return color.YellowString("Link limit reached")
+	case "space_invite_received":
+		return color.CyanString("Space invite received")
+	case "space_invite_accepted":
+		return color.GreenString("Space invite accepted")
+	case "space_invite_declined":
+		return color.HiBlackString("Space invite declined")
+	case "space_member_left":
+		return color.YellowString("Member left a space")
+	case "space_member_joined":
+		return color.GreenString("Member joined a space")
+	case "space_member_removed":
+		return color.YellowString("Member removed from a space")
+	case "space_archived":
+		return color.YellowString("Space archived")
+	case "space_unarchived":
+		return color.GreenString("Space reopened")
+	case "space_deleted":
+		return color.RedString("Space deleted")
 	case "storage_warning":
 		return color.YellowString("Storage warning")
 	case "storage_full":
@@ -322,6 +353,10 @@ func formatEventType(eventType string) string {
 		return color.RedString("Subscription expired")
 	case "payment_failed":
 		return color.RedString("Payment failed")
+	case "payment_action_required":
+		return color.YellowString("Payment action required")
+	case "subscription_disputed":
+		return color.RedString("Payment disputed")
 	case "expansion_pack_added":
 		return color.CyanString("Storage expanded")
 	case "expansion_pack_removed":
@@ -342,12 +377,24 @@ func formatEventType(eventType string) string {
 		return color.HiBlackString("Message edited")
 	case "chat_message_deleted":
 		return color.HiBlackString("Message deleted")
+	case "chat_group_message_received":
+		return color.CyanString("New group message")
+	case "chat_group_added":
+		return color.CyanString("Added to a group")
+	case "chat_group_removed":
+		return color.YellowString("Removed from a group")
+	case "chat_group_owner_promoted":
+		return color.CyanString("Promoted to group owner")
+	case "chat_group_message_reaction":
+		return color.CyanString("New group reaction")
 	case "cli_update":
 		return color.CyanString("CLI update available")
 	case "desktop_update":
 		return color.CyanString("Desktop update available")
 	case "platform_update":
 		return color.CyanString("Platform update")
+	case "admin_report_received":
+		return color.YellowString("Abuse report received")
 	default:
 		return eventType
 	}
@@ -357,14 +404,14 @@ func decryptEventDetail(detail string) string {
 	if detail == "" {
 		return ""
 	}
-	if !cmdutil.HasE2EEKeys() {
+	if !e2ee.HasE2EEKeys() {
 		return detail
 	}
 	sealed, err := base64.StdEncoding.DecodeString(detail)
 	if err != nil {
 		return detail
 	}
-	_, privKey := cmdutil.GetKeyPair(func() {})
+	_, privKey := e2ee.GetKeyPair(func() {})
 	if privKey == nil {
 		return detail
 	}
@@ -428,7 +475,7 @@ func resolveNodeRefs(detail string) string {
 }
 
 func fetchNodePaths() map[string]string {
-	if !cmdutil.HasE2EEKeys() {
+	if !e2ee.HasE2EEKeys() {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -453,7 +500,7 @@ func fetchNodePaths() map[string]string {
 		entry := &payload.Results[i]
 		name := entry.Name
 		if entry.E2EEDisplayName != "" {
-			name = cmdutil.DecryptE2EEName(entry.E2EEDisplayName)
+			name = e2ee.DecryptE2EEName(entry.E2EEDisplayName)
 		}
 		if entry.ID == "" || name == "" || name == "(encrypted)" {
 			continue

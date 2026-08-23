@@ -35,12 +35,12 @@ The script downloads the right build for your platform, verifies its SHA-256, an
 
 Download the appropriate binary for your platform from the [releases page](https://github.com/pigtech-de/pigcloud-cli/releases).
 
-Each release contains two binaries: `pigcloud` (full name) and `pc` (shorthand alias).
+Every archive contains two binaries: `pigcloud` (full name) and `pc` (shorthand alias), named exactly that inside the archive (`pigcloud.exe` and `pc.exe` on Windows).
 
 #### Linux / macOS
 
 ```bash
-curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.2.0-linux-amd64.tar.gz -o pigcloud.tar.gz
+curl -sSL https://github.com/pigtech-de/pigcloud-cli/releases/download/v3.3.0/pigcloud-3.3.0-linux-amd64.tar.gz -o pigcloud.tar.gz
 tar -xzf pigcloud.tar.gz
 sudo install -m 755 pigcloud pc /usr/local/bin/
 ```
@@ -49,7 +49,7 @@ sudo install -m 755 pigcloud pc /usr/local/bin/
 
 ```powershell
 # Download and extract
-Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/latest/download/pigcloud-3.2.0-windows-amd64.zip" -OutFile pigcloud.zip
+Invoke-WebRequest -Uri "https://github.com/pigtech-de/pigcloud-cli/releases/download/v3.3.0/pigcloud-3.3.0-windows-amd64.zip" -OutFile pigcloud.zip
 Expand-Archive pigcloud.zip -DestinationPath "$env:LOCALAPPDATA\pigcloud"
 
 # Add to PATH (current user, persistent)
@@ -191,13 +191,14 @@ COMMANDS
 │   │   ├── mv           Move the sync folder to a different location [-d] [-f]
 │   │   ├── pin          Pin a file or folder for offline access [--list] [--remove]
 │   │   ├── resolve      Settle a sync conflict [-f] [-k]
-│   │   ├── start        Start the mount daemon [--cache-size] [--poll-interval] [--read-only] [--virtual]
+│   │   ├── retry        Re-attempt transfers that gave up
+│   │   ├── start        Start the mount daemon [--cache-size] [--log-level] [--poll-interval] [--read-only] [--virtual]
 │   │   ├── status       Show mount status and cache statistics
 │   │   └── stop         Stop a mount daemon and unmount [-a]
 │   │
 │   ├── mv, move         Move or rename a file/directory [-d]
 │   ├── rm, remove       Delete files or directories [-d] [-f] [-p]
-│   ├── rs, restore      Restore an item from the recycling bin
+│   ├── rs, restore      Restore an item from the recycling bin [--to-root]
 │   ├── tb, trash        Manage recycling bin [-S] [-t]
 │   │   ├── empty        Permanently delete all items in the recycling bin [-f]
 │   │   └── ls           List recycling bin contents
@@ -547,6 +548,7 @@ pc mn start                  # Sync root at default location
 pc mn stop                   # Unmount and stop sync
 pc mn files --tree           # Show synced files as a tree
 pc mn files --issues         # Show files with sync problems
+pc mn retry                  # Re-attempt transfers that gave up
 pc mn conflicts              # List files changed on both sides
 pc mn resolve <path> -k both # Settle a conflict, keeping both copies
 ```
@@ -578,6 +580,22 @@ Settle a conflict for a file that changed both locally and remotely.
 ```bash
 pc mn resolve Docs/notes.txt -k both
 pc mn resolve Docs/notes.txt -k remote -f
+```
+
+
+#### `mn retry`: Re-attempt transfers that gave up
+
+Clear the give-up flag on files whose upload or download failed for good and
+try them again.
+
+Use it after fixing the cause: freeing quota, friending the collaborator whose
+upload landed in your folder, or waiting out a scanner outage. Without a path it
+retries every failed file in the mount; with one it retries that file only.
+
+
+```bash
+pc mn retry
+pc mn retry Docs/report.pdf
 ```
 
 
@@ -1167,7 +1185,7 @@ bug reports and feature requests go to
 [pigcloud-issues](https://github.com/pigtech-de/pigcloud-issues/issues).
 
 The source is available under the
-[PolyForm Internal Use License 1.0.0](LICENSE): you may read, audit, and build
-it for your own internal or personal use. Any other use, including
-redistribution, needs written permission from PigTech. Official binaries are
-provided under the [PigCloud Terms of Service](https://pigtech.de/terms/).
+[PolyForm Shield License 1.0.0](LICENSE): you may read, audit, build, and use
+it for any purpose except providing a product that competes with PigCloud.
+Official binaries are provided under the
+[PigCloud Terms of Service](https://pigtech.de/terms/).

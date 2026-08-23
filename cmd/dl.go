@@ -9,16 +9,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -68,9 +68,7 @@ func init() {
 }
 
 func runDownload(remotePath, localPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(remotePath)
@@ -121,17 +119,7 @@ func runDownload(remotePath, localPath string) {
 	}
 
 	dlOpts := map[string]string{}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(dlOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(dlOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	bar := output.NewProgressBar(-1, "Downloading "+fileName)
 
@@ -159,9 +147,7 @@ func runDownload(remotePath, localPath string) {
 		ExitWithError()
 	}
 
-	if dlResult != nil && dlResult.E2EE {
-		decryptDownloadedFile(localPath, dlResult)
-	}
+	decryptDownloadedFile(localPath, dlResult)
 
 	finalStat, _ := os.Stat(localPath)
 	var size int64
@@ -186,17 +172,7 @@ func runStdoutDownload(ctx context.Context, resolvedPath string) {
 	defer os.Remove(tmpPath)
 
 	stdoutOpts := map[string]string{}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(stdoutOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(stdoutOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	bar := output.NewProgressBar(-1, "Downloading "+filepath.Base(resolvedPath))
 	client := api.NewClient()
@@ -213,9 +189,7 @@ func runStdoutDownload(ctx context.Context, resolvedPath string) {
 		ExitWithError()
 	}
 
-	if dlResult != nil && dlResult.E2EE {
-		decryptDownloadedFile(tmpPath, dlResult)
-	}
+	decryptDownloadedFile(tmpPath, dlResult)
 
 	f, err := os.Open(tmpPath)
 	if err != nil {
@@ -234,17 +208,7 @@ func runExtractDownload(ctx context.Context, resolvedPath, localDir string) {
 		"source": resolvedPath,
 		"depth":  "100",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 	_, treeListing := cmdutil.ExecuteCommand[api.TreePayload](ctx, "tr", options, ExitWithError)
 	decryptTreeEntries(treeListing.Entries)
 
@@ -310,17 +274,7 @@ func runExtractDownload(ctx context.Context, resolvedPath, localDir string) {
 		}
 
 		perFileOpts := map[string]string{}
-		if cmdutil.HasE2EEKeys() {
-			fileTrimmed := strings.TrimPrefix(f.remotePath, "/")
-			var filePaths []string
-			if fileTrimmed != "" {
-				filePaths = append(filePaths, fileTrimmed)
-				for p := filepath.Dir(fileTrimmed); p != "." && p != ""; p = filepath.Dir(p) {
-					filePaths = append(filePaths, p)
-				}
-			}
-			cmdutil.AddPathTokens(perFileOpts, filePaths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(perFileOpts, f.remotePath, e2ee.SelfAndAncestors, ExitWithError)
 
 		label := fmt.Sprintf("[%d/%d] %s", i+1, len(files), relDisplay)
 		bar := output.NewProgressBar(-1, label)
@@ -337,9 +291,7 @@ func runExtractDownload(ctx context.Context, resolvedPath, localDir string) {
 			os.Remove(f.localPath)
 			failed++
 		} else {
-			if dlResult != nil && dlResult.E2EE {
-				decryptDownloadedFile(f.localPath, dlResult)
-			}
+			decryptDownloadedFile(f.localPath, dlResult)
 			succeeded++
 		}
 	}
@@ -362,17 +314,7 @@ func runZipDownload(ctx context.Context, resolvedPath, localPath string) {
 		"source": resolvedPath,
 		"depth":  "100",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(zipTreeOpts, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(zipTreeOpts, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 	_, treeListing := cmdutil.ExecuteCommand[api.TreePayload](ctx, "tr", zipTreeOpts, ExitWithError)
 	decryptTreeEntries(treeListing.Entries)
 
@@ -457,17 +399,7 @@ func runZipDownload(ctx context.Context, resolvedPath, localPath string) {
 		tmpFile.Close()
 
 		zipFileOpts := map[string]string{}
-		if cmdutil.HasE2EEKeys() {
-			fileTrimmed := strings.TrimPrefix(f.remotePath, "/")
-			var filePaths []string
-			if fileTrimmed != "" {
-				filePaths = append(filePaths, fileTrimmed)
-				for p := filepath.Dir(fileTrimmed); p != "." && p != ""; p = filepath.Dir(p) {
-					filePaths = append(filePaths, p)
-				}
-			}
-			cmdutil.AddPathTokens(zipFileOpts, filePaths, ExitWithError)
-		}
+		e2ee.AddPathTokensFor(zipFileOpts, f.remotePath, e2ee.SelfAndAncestors, ExitWithError)
 
 		label := fmt.Sprintf("[%d/%d] %s", i+1, len(files), f.relPath)
 		bar := output.NewProgressBar(-1, label)
@@ -487,9 +419,7 @@ func runZipDownload(ctx context.Context, resolvedPath, localPath string) {
 			continue
 		}
 
-		if dlResult != nil && dlResult.E2EE {
-			decryptDownloadedFile(tmpPath, dlResult)
-		}
+		decryptDownloadedFile(tmpPath, dlResult)
 
 		data, err := os.ReadFile(tmpPath)
 		os.Remove(tmpPath)
@@ -537,13 +467,18 @@ func isZipExtension(path string) bool {
 }
 
 func decryptDownloadedFile(filePath string, dlResult *api.DownloadResult) {
+	if gateErr := e2ee.RequireEncryptedDownload(dlResult); gateErr != nil {
+		output.PrintError("Download refused: " + gateErr.Error())
+		os.Remove(filePath)
+		ExitWithError()
+	}
 	f, openErr := os.Open(filePath)
 	if openErr != nil {
 		output.PrintError("Failed to open downloaded file: " + openErr.Error())
 		os.Remove(filePath)
 		ExitWithError()
 	}
-	verifyErr := cmdutil.VerifyDownloadIntegrity(f, dlResult)
+	verifyErr := e2ee.VerifyDownloadIntegrity(f, dlResult)
 	f.Close()
 	if verifyErr != nil {
 		output.PrintError("Signature verification failed: " + verifyErr.Error())
@@ -551,7 +486,7 @@ func decryptDownloadedFile(filePath string, dlResult *api.DownloadResult) {
 		ExitWithError()
 	}
 
-	_, privKey := cmdutil.GetKeyPair(ExitWithError)
+	_, privKey := e2ee.GetKeyPair(ExitWithError)
 
 	sealedKeyBytes, err := base64.StdEncoding.DecodeString(dlResult.SealedKey)
 	if err != nil {

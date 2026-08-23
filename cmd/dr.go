@@ -7,13 +7,15 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/mount"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var doctorCmd = &cobra.Command{
@@ -93,10 +95,16 @@ func runDoctor() {
 		add("key agent", "info", "not running; keys locked (run 'pc uk')")
 	}
 
-	if n := cmdutil.SigningPinCount(); n > 0 {
+	if n := e2ee.SigningPinCount(); n > 0 {
 		add("download pin", "ok", fmt.Sprintf("%d signing key(s) pinned", n))
 	} else {
 		add("download pin", "info", "no pinned signing keys yet (seeds on first verified download)")
+	}
+
+	if n := e2ee.PeerSigningPinCount(); n > 0 {
+		add("peer pin", "ok", fmt.Sprintf("%d collaborator signing key(s) pinned", n))
+	} else {
+		add("peer pin", "info", "no pinned collaborator keys yet (pins on a friend's first upload into your tree)")
 	}
 
 	if runtime.GOOS == "windows" {

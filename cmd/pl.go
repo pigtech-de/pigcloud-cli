@@ -9,14 +9,16 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/fatih/color"
-	qrcode "github.com/skip2/go-qrcode"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	qrcode "github.com/skip2/go-qrcode"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -115,9 +117,7 @@ func init() {
 }
 
 func runLinkCreate(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -135,16 +135,11 @@ func runLinkCreate(targetPath string) {
 		options["max-downloads"] = plMaxDownloads
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 
 	var linkKeyFragment string
 	var linkKeyRaw []byte
-	if cmdutil.HasE2EEKeys() {
+	if e2ee.HasE2EEKeys() {
 		fragment, sealedLinkKeyB64, nonceB64, rawKey := generateLinkKey(ctx, resolvedPath)
 		if fragment != "" {
 			linkKeyFragment = fragment
@@ -197,12 +192,7 @@ func generateLinkKey(ctx context.Context, filePath string) (string, string, stri
 	client := api.NewClient()
 
 	listKeysOpts := map[string]string{"source": filePath}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(filePath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(listKeysOpts, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(listKeysOpts, filePath, e2ee.SelfOnly, ExitWithError)
 	keysResp, err := client.Execute(ctx, "e2ee_list_keys", listKeysOpts)
 	if err != nil || !keysResp.Success {
 		return "", "", "", nil
@@ -215,7 +205,7 @@ func generateLinkKey(ctx context.Context, filePath string) (string, string, stri
 		return "", "", "", nil
 	}
 
-	_, privKey := cmdutil.GetKeyPair(ExitWithError)
+	_, privKey := e2ee.GetKeyPair(ExitWithError)
 
 	sealedBytes, err := base64.StdEncoding.DecodeString(keysPayload.Keys[0].SealedKey)
 	if err != nil {
@@ -277,9 +267,7 @@ func encryptLinkNameFromPath(filePath string, linkKey []byte) string {
 }
 
 func runLinkGet(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -287,12 +275,7 @@ func runLinkGet(targetPath string) {
 		"source": resolvedPath,
 		"mode":   "get",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(plGetOpts, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(plGetOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	resp, payload := cmdutil.ExecuteCommand[api.LinkGetPayload](ctx, "pl", plGetOpts, ExitWithError)
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
@@ -323,9 +306,7 @@ func runLinkGet(targetPath string) {
 }
 
 func runLinkUpdate(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -352,12 +333,7 @@ func runLinkUpdate(targetPath string) {
 		options["remove-max-downloads"] = "true"
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 
 	cmdutil.ExecuteCommand[api.LinkActionPayload](ctx, "pl", options, ExitWithError)
 	output.PrintSuccess("Public link updated")
@@ -382,21 +358,14 @@ func runLinkDelete(targetPath string) {
 		"source": resolvedPath,
 		"mode":   "delete",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(plDelOpts, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(plDelOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	cmdutil.ExecuteCommand[api.LinkActionPayload](ctx, "pl", plDelOpts, ExitWithError)
 
 	output.PrintSuccess("Public link removed for " + output.PrintPath(resolvedPath))
 }
 
 func runLinkList() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.LinkListPayload](ctx, "pl", map[string]string{
@@ -406,7 +375,7 @@ func runLinkList() {
 	for i := range payload.Links {
 		link := &payload.Links[i]
 		if link.E2EEDisplayName != "" {
-			decrypted := cmdutil.DecryptE2EEName(link.E2EEDisplayName)
+			decrypted := e2ee.DecryptE2EEName(link.E2EEDisplayName)
 			if decrypted != "" {
 				link.E2EEDisplayName = decrypted
 			}

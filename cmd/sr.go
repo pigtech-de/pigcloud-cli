@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var sharePermission string
@@ -157,9 +158,7 @@ func init() {
 }
 
 func runShareAdd(targetPath, username string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -172,7 +171,7 @@ func runShareAdd(targetPath, username string) {
 		options["force"] = "1"
 	}
 
-	if cmdutil.HasE2EEKeys() {
+	if e2ee.HasE2EEKeys() {
 		sealedKeys, sealedNames := resealKeysAndNamesForRecipient(ctx, resolvedPath, username)
 		if sealedKeys != "" {
 			options["sealed_keys"] = sealedKeys
@@ -182,12 +181,7 @@ func runShareAdd(targetPath, username string) {
 		}
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.SharePayload](ctx, "sr", options, ExitWithError)
 
@@ -237,7 +231,7 @@ func resealKeysAndNamesForRecipient(ctx context.Context, folderPath, recipientUs
 		return "", ""
 	}
 
-	_, privKey := cmdutil.GetKeyPair(ExitWithError)
+	_, privKey := e2ee.GetKeyPair(ExitWithError)
 
 	type sealedKeyEntry struct {
 		NodeID    string `json:"node_id"`
@@ -292,9 +286,7 @@ func resealKeysAndNamesForRecipient(ctx context.Context, folderPath, recipientUs
 }
 
 func runShareList(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -302,12 +294,7 @@ func runShareList(targetPath string) {
 		"source": resolvedPath,
 		"mode":   "list",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(srListOpts, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(srListOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	resp, payload := cmdutil.ExecuteCommand[api.ShareListPayload](ctx, "sr", srListOpts, ExitWithError)
 
 	if cmdutil.PrintJSONOrContinue(GetJSONOutput(), payload) {
@@ -361,21 +348,14 @@ func runShareRemove(targetPath, username string) {
 		"username": username,
 		"mode":     "remove",
 	}
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(srRmOpts, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(srRmOpts, resolvedPath, e2ee.SelfOnly, ExitWithError)
 	_, payload := cmdutil.ExecuteCommand[api.SharePayload](ctx, "sr", srRmOpts, ExitWithError)
 
 	output.PrintSuccess("Removed " + payload.Username + " from " + output.PrintPath(payload.Path))
 }
 
 func runShareInbox() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.ShareInboxPayload](ctx, "sr", map[string]string{
@@ -385,7 +365,7 @@ func runShareInbox() {
 	for i := range payload.Shares {
 		s := &payload.Shares[i]
 		if s.E2EEDisplayName != "" {
-			s.Name = cmdutil.DecryptE2EEName(s.E2EEDisplayName)
+			s.Name = e2ee.DecryptE2EEName(s.E2EEDisplayName)
 		}
 	}
 
@@ -414,9 +394,7 @@ func runShareInbox() {
 }
 
 func runShareUpdate(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -443,12 +421,7 @@ func runShareUpdate(targetPath string) {
 		options["remove-expiration"] = "true"
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		if trimmed != "" {
-			cmdutil.AddPathTokens(options, []string{trimmed}, ExitWithError)
-		}
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfOnly, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.ShareUpdatePayload](ctx, "sr", options, ExitWithError)
 
@@ -463,9 +436,7 @@ func runShareUpdate(targetPath string) {
 }
 
 func runShareAccept(targetPath, owner string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	_, payload := cmdutil.ExecuteCommand[api.SharePayload](ctx, "sr", map[string]string{
@@ -478,9 +449,7 @@ func runShareAccept(targetPath, owner string) {
 }
 
 func runShareDecline(targetPath, owner string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	_, payload := cmdutil.ExecuteCommand[api.SharePayload](ctx, "sr", map[string]string{

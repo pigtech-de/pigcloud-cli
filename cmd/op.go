@@ -1,17 +1,24 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"runtime"
 	"strings"
 
-	"github.com/spf13/cobra"
+	"pigcloud/internal/api"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var opCmd = &cobra.Command{
@@ -53,7 +60,16 @@ func runOpen(targetPath string) {
 	}
 
 	endpoint := config.GetEndpoint()
-	webURL := buildWebURL(endpoint, targetPath)
+	fragment := strings.TrimPrefix(targetPath, "/")
+	if e2ee.HasE2EEKeys() && fragment != "" {
+		if nodeID := resolveNodeID(targetPath); nodeID != "" {
+			fragment = "!n" + strings.ToLower(nodeID)
+		} else {
+			output.PrintWarning("Could not resolve " + output.PrintPath(targetPath) + "; opening the cloud root (names never go in URLs).")
+			fragment = ""
+		}
+	}
+	webURL := buildWebURL(endpoint, fragment)
 
 	if !GetQuietOutput() {
 		output.PrintInfo("Opening " + output.PrintPath(targetPath))
@@ -65,10 +81,26 @@ func runOpen(targetPath string) {
 	}
 }
 
-func buildWebURL(endpoint, targetPath string) string {
+func resolveNodeID(targetPath string) string {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	options := map[string]string{"source": targetPath}
+	e2ee.AddPathTokensFor(options, targetPath, e2ee.SelfAndParent, ExitWithError)
+	resp, err := api.NewClient().Execute(ctx, "in", options)
+	if err != nil || resp == nil || !resp.Success {
+		return ""
+	}
+	var payload api.InfoPayload
+	if json.Unmarshal(resp.Raw, &payload) != nil {
+		return ""
+	}
+	return payload.Details.NodeID
+}
+
+func buildWebURL(endpoint, fragment string) string {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
-		return "https://pigtech.de/cloud/#" + strings.TrimPrefix(targetPath, "/")
+		return config.DefaultBaseURL + "/cloud/#" + fragment
 	}
 
 	basePath := strings.TrimSuffix(parsed.Path, "actions.php")
@@ -76,7 +108,7 @@ func buildWebURL(endpoint, targetPath string) string {
 
 	parsed.Path = basePath + "/"
 	parsed.RawQuery = ""
-	parsed.Fragment = strings.TrimPrefix(targetPath, "/")
+	parsed.Fragment = fragment
 
 	return parsed.String()
 }

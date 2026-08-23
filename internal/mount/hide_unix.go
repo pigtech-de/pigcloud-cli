@@ -2,6 +2,6 @@
 
 package mount
 
-func hideDir(_ string) {}
+func HideDir(_ string) {}
 
 func HideMetaDir(_ string) {}

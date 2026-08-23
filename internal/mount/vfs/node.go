@@ -41,6 +41,7 @@ type Node struct {
 
 	Downloading bool
 	DownloadCh  chan struct{}
+	DownloadErr error
 }
 
 func NewRootNode(remotePath string) *Node {
@@ -91,10 +92,12 @@ func (n *Node) AddChild(child *Node) {
 	child.Parent = n
 }
 
-func (n *Node) RemoveChild(name string) {
+func (n *Node) RemoveChild(name string) *Node {
 	n.Mu.Lock()
 	defer n.Mu.Unlock()
+	child := n.Children[name]
 	delete(n.Children, name)
+	return child
 }
 
 func (n *Node) GetChild(name string) *Node {

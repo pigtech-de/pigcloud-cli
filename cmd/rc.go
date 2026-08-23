@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
 
 	"github.com/spf13/cobra"
@@ -34,9 +32,7 @@ func init() {
 }
 
 func runRecentList() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := map[string]string{}
@@ -49,7 +45,7 @@ func runRecentList() {
 	for i := range payload.Recents {
 		item := &payload.Recents[i]
 		if item.E2EEDisplayName != "" {
-			item.Name = cmdutil.DecryptE2EEName(item.E2EEDisplayName)
+			item.Name = e2ee.DecryptE2EEName(item.E2EEDisplayName)
 		}
 	}
 

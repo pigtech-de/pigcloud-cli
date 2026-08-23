@@ -1,18 +1,17 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var mvDry bool
@@ -43,13 +42,11 @@ pc mv "*.log" /logs/                # Move by glob`,
 }
 
 func runMvMulti(args []string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	target := args[len(args)-1]
-	sources := expandPathArgs(ctx, args[:len(args)-1])
+	sources := cmdutil.ExpandPathArgs(ctx, args[:len(args)-1], ExitWithError)
 	if len(sources) == 0 {
 		output.PrintError("Nothing to move")
 		ExitWithError()
@@ -72,9 +69,7 @@ func init() {
 }
 
 func runMv(source, target string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedSource := cmdutil.ResolvePath(source)
@@ -99,27 +94,10 @@ func runMv(source, target string) {
 		options["dry-run"] = "true"
 	}
 
-	fullPath, baseName := cmdutil.ResolveAndBaseName(effectiveTarget)
-	cmdutil.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
+	fullPath, baseName := e2ee.ResolveAndBaseName(effectiveTarget)
+	e2ee.AddE2eeNameFields(options, baseName, fullPath, ExitWithError)
 
-	if cmdutil.HasE2EEKeys() {
-		var paths []string
-		srcTrimmed := strings.TrimPrefix(resolvedSource, "/")
-		tgtTrimmed := strings.TrimPrefix(effectiveTarget, "/")
-		if srcTrimmed != "" {
-			paths = append(paths, srcTrimmed)
-			if parent := filepath.Dir(srcTrimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		if tgtTrimmed != "" {
-			paths = append(paths, tgtTrimmed)
-			if parent := filepath.Dir(tgtTrimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensForAll(options, []string{resolvedSource, effectiveTarget}, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.MovePayload](ctx, "mv", options, ExitWithError)
 
@@ -137,7 +115,7 @@ func runMv(source, target string) {
 		return
 	}
 
-	cmdutil.PropagateSubtreeNamesAtPath(ctx, effectiveTarget, ExitWithError)
+	e2ee.PropagateSubtreeNamesAtPath(ctx, effectiveTarget, ExitWithError)
 
 	if !GetQuietOutput() {
 		if payload.Count > 0 {

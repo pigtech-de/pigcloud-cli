@@ -6,13 +6,15 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"pigcloud/internal/agent"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/config"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/fatih/color"
+	"github.com/spf13/cobra"
 )
 
 var akRevokeForce bool
@@ -63,8 +65,7 @@ func init() {
 }
 
 func runAPIKeyStatus() {
-	cmdutil.RequireLogin(ExitWithError)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resp, payload := cmdutil.ExecuteCommand[api.APIKeyStatusPayload](ctx, "ak", map[string]string{
@@ -115,7 +116,7 @@ func runAPIKeyRevoke() {
 
 	if payload.Revoked {
 		agent.Shutdown()
-		cmdutil.ClearCachedKey()
+		e2ee.ClearCachedKey()
 		_ = config.Clear()
 	}
 

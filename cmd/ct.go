@@ -2,22 +2,21 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
 	"pigcloud/internal/completion"
 	"pigcloud/internal/crypto"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -51,9 +50,7 @@ func init() {
 }
 
 func runCt(targetPath string) {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	resolvedPath := cmdutil.ResolvePath(targetPath)
@@ -66,34 +63,18 @@ func runCt(targetPath string) {
 		options["tail"] = strconv.Itoa(ctTail)
 	}
 
-	if cmdutil.HasE2EEKeys() {
-		trimmed := strings.TrimPrefix(resolvedPath, "/")
-		var paths []string
-		if trimmed != "" {
-			paths = append(paths, trimmed)
-			if parent := filepath.Dir(trimmed); parent != "." && parent != "" {
-				paths = append(paths, parent)
-			}
-		}
-		cmdutil.AddPathTokens(options, paths, ExitWithError)
-	}
+	e2ee.AddPathTokensFor(options, resolvedPath, e2ee.SelfAndParent, ExitWithError)
 
 	_, payload := cmdutil.ExecuteCommand[api.CatPayload](ctx, "ct", options, ExitWithError)
 
-	content := payload.Content
-
-	if payload.E2EE {
-		content = decryptCatContent(payload)
-	}
+	content := decryptCatContent(payload)
 
 	if GetJSONOutput() {
 		out := payload
-		if payload.E2EE {
-			out.Content = content
-			out.E2EE = false
-			out.SealedKey = ""
-			out.EncryptionMeta = ""
-		}
+		out.Content = content
+		out.E2EE = false
+		out.SealedKey = ""
+		out.EncryptionMeta = ""
 		cmdutil.PrintJSONOrContinue(true, out)
 		return
 	}
@@ -105,18 +86,23 @@ func runCt(targetPath string) {
 }
 
 func decryptCatContent(payload api.CatPayload) string {
+	dlResult := payload.AsDownloadResult()
+	if gateErr := e2ee.RequireEncryptedDownload(dlResult); gateErr != nil {
+		output.PrintError("Read refused: " + gateErr.Error())
+		ExitWithError()
+	}
 	encryptedBytes, err := base64.StdEncoding.DecodeString(payload.Content)
 	if err != nil {
 		output.PrintError("Invalid encrypted content: " + err.Error())
 		ExitWithError()
 	}
 
-	if err := cmdutil.VerifyDownloadIntegrity(bytes.NewReader(encryptedBytes), payload.AsDownloadResult()); err != nil {
+	if err := e2ee.VerifyDownloadIntegrity(bytes.NewReader(encryptedBytes), dlResult); err != nil {
 		output.PrintError("Signature verification failed: " + err.Error())
 		ExitWithError()
 	}
 
-	_, privKey := cmdutil.GetKeyPair(ExitWithError)
+	_, privKey := e2ee.GetKeyPair(ExitWithError)
 
 	sealedKeyBytes, err := base64.StdEncoding.DecodeString(payload.SealedKey)
 	if err != nil {

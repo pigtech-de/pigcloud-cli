@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/spf13/cobra"
 	"pigcloud/internal/api"
 	"pigcloud/internal/cmdutil"
+	"pigcloud/internal/e2ee"
 	"pigcloud/internal/output"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -68,9 +70,7 @@ func init() {
 }
 
 func runTrashList() {
-	cmdutil.RequireLogin(ExitWithError)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := cmdutil.StartAuthed(ExitWithError)
 	defer cancel()
 
 	options := map[string]string{}
@@ -86,7 +86,7 @@ func runTrashList() {
 	for i := range payload.Items {
 		item := &payload.Items[i]
 		if item.E2EEDisplayName != "" {
-			item.Name = cmdutil.DecryptE2EEName(item.E2EEDisplayName)
+			item.Name = e2ee.DecryptE2EEName(item.E2EEDisplayName)
 		}
 		if item.Type == "" && item.ItemType != "" {
 			item.Type = item.ItemType

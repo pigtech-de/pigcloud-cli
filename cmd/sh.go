@@ -5,15 +5,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"pigcloud/internal/completion"
+	"pigcloud/internal/config"
+	"pigcloud/internal/output"
 
 	"github.com/chzyer/readline"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"pigcloud/internal/completion"
-	"pigcloud/internal/config"
-	"pigcloud/internal/output"
 )
 
 const (
@@ -230,34 +232,35 @@ func (c *shellCompleter) completeFlags(cmdName, prefix string) ([][]rune, int) {
 		return nil, 0
 	}
 
-	var candidates [][]rune
-	target.Flags().VisitAll(func(f *pflag.Flag) {
+	seen := map[string]struct{}{}
+	var tokens []string
+	add := func(token string) {
+		if !strings.HasPrefix(token, prefix) {
+			return
+		}
+		if _, dup := seen[token]; dup {
+			return
+		}
+		seen[token] = struct{}{}
+		tokens = append(tokens, token)
+	}
+	collect := func(f *pflag.Flag) {
 		if f.Hidden {
 			return
 		}
-		long := "--" + f.Name
-		if strings.HasPrefix(long, prefix) {
-			suffix := long[len(prefix):] + " "
-			candidates = append(candidates, []rune(suffix))
-		}
+		add("--" + f.Name)
 		if f.Shorthand != "" {
-			short := "-" + f.Shorthand
-			if strings.HasPrefix(short, prefix) {
-				suffix := short[len(prefix):] + " "
-				candidates = append(candidates, []rune(suffix))
-			}
+			add("-" + f.Shorthand)
 		}
-	})
-	target.InheritedFlags().VisitAll(func(f *pflag.Flag) {
-		if f.Hidden {
-			return
-		}
-		long := "--" + f.Name
-		if strings.HasPrefix(long, prefix) {
-			suffix := long[len(prefix):] + " "
-			candidates = append(candidates, []rune(suffix))
-		}
-	})
+	}
+	target.Flags().VisitAll(collect)
+	target.InheritedFlags().VisitAll(collect)
+	sort.Strings(tokens)
+
+	candidates := make([][]rune, 0, len(tokens))
+	for _, token := range tokens {
+		candidates = append(candidates, []rune(token[len(prefix):]+" "))
+	}
 	return candidates, len(prefix)
 }
 
